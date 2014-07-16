@@ -52,6 +52,8 @@ struct ppcg_options {
 	const char **opencl_include_files;
 	/* Embed OpenCL kernel code in host code. */
 	int opencl_embed_kernel_code;
+	/* Use OpenCL PENCIL runtime. */
+	int opencl_pencil_runtime;
 };
 
 ISL_ARG_DECL(ppcg_debug_options, struct ppcg_debug_options,
