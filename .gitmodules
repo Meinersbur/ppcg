@@ -4,3 +4,6 @@
 [submodule "pet"]
 	path = pet
 	url = git://repo.or.cz/pet.git
+[submodule "pencil-util"]
+	path = pencil-util
+	url = git://github.com/carpproject/pencil-util.git
