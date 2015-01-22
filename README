@@ -71,6 +71,13 @@ To generate OpenCL code run
 where file.c is the file containing the fragment.  The generated code
 is stored in file_host.c and file_kernel.cl.
 
+To generate OpenCL code that uses the PENCIL runtime library, run
+
+  ppcg --target=opencl --opencl-pencil-runtime file.c
+
+where file.c is the file containing the fragment.  The generated code
+is stored in file_host.c and file_kernel.cl.
+
 
 Specifying tile, grid and block sizes
 
