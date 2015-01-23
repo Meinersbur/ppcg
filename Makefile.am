@@ -57,6 +57,8 @@ TEST_EXTENSIONS = .sh
 
 EXTRA_DIST = \
 	tests
+	
+CLEANFILES = gitversion.h
 
 dist-hook:
 	echo @GIT_HEAD_VERSION@ > $(distdir)/GIT_HEAD_ID
