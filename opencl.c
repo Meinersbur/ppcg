@@ -95,16 +95,13 @@ static int opencl_open_files(struct opencl_info *info)
 
 	fprintf(info->host_c, "#include <assert.h>\n");
 	fprintf(info->host_c, "#include <stdio.h>\n");
-	fprintf(info->host_c, "#include \"ocl_utilities.h\"\n");
 	if (info->options->opencl_embed_kernel_code) {
 		fprintf(info->host_c, "#include \"%s\"\n\n",
 			info->kernel_c_name);
 	}
 
-	if (info->options->opencl_pencil_runtime) {
-		fprintf(info->host_c, "#include <pencil_runtime.h>\n");
-		fprintf(info->host_c, "#include <opencl/pencil_int.h>\n");
-	}
+	fprintf(info->host_c, "#include <pencil_runtime.h>\n");
+	fprintf(info->host_c, "#include <opencl/pencil_int.h>\n");
 	for (i = 0; i < info->options->opencl_n_include_file; ++i) {
 		info->kprinter = isl_printer_print_str(info->kprinter,
 					"#include <");
@@ -225,8 +222,7 @@ static __isl_give isl_printer *opencl_print_host_macros(
 }
 
 static __isl_give isl_printer *opencl_declare_device_arrays(
-	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct opencl_info *info)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
 	int i;
 
@@ -234,10 +230,7 @@ static __isl_give isl_printer *opencl_declare_device_arrays(
 		if (gpu_array_is_read_only_scalar(&prog->array[i]))
 			continue;
 		p = isl_printer_start_line(p);
-		if (info->options->opencl_pencil_runtime)
-			p = isl_printer_print_str(p, "pencil_cl_mem dev_");
-		else
-			p = isl_printer_print_str(p, "cl_mem dev_");
+		p = isl_printer_print_str(p, "pencil_cl_mem dev_");
 		p = isl_printer_print_str(p, prog->array[i].name);
 		p = isl_printer_print_str(p, ";");
 		p = isl_printer_end_line(p);
@@ -279,10 +272,7 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "dev_");
 	p = isl_printer_print_str(p, array->name);
-	if (info->options->opencl_pencil_runtime)
-		p = isl_printer_print_str(p, " = opencl_create_device_buffer(");
-	else
-		p = isl_printer_print_str(p, " = clCreateBuffer(context, ");
+	p = isl_printer_print_str(p, " = opencl_create_device_buffer(");
 	p = isl_printer_print_str(p, "CL_MEM_READ_WRITE, ");
 
 	need_lower_bound = !is_array_positive_size_guard_trivial(array);
@@ -295,19 +285,13 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 	if (need_lower_bound)
 		p = isl_printer_print_str(p, ")");
 
-	if (info->options->opencl_pencil_runtime) {
-		p = isl_printer_print_str(p, ", ");
-		if (needs_ptr)
-			p = isl_printer_print_str(p, array->name);
-		else
-			p = isl_printer_print_str(p, "NULL");
-		p = isl_printer_print_str(p, ");");
-	} else {
-		p = isl_printer_print_str(p, ", NULL, &err);");
-		p = isl_printer_end_line(p);
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "openclCheckReturn(err);");
-	}
+	p = isl_printer_print_str(p, ", ");
+	if (needs_ptr) {
+		p = isl_printer_print_str(p, "&");
+		p = isl_printer_print_str(p, array->name);
+	} else
+		p = isl_printer_print_str(p, "NULL");
+	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
 
 	p = ppcg_end_block(p);
@@ -318,8 +302,7 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 /* Allocate device arrays.
  */
 static __isl_give isl_printer *opencl_allocate_device_arrays(
-	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct opencl_info *info)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
 	int i;
 
@@ -357,11 +340,7 @@ static __isl_give isl_printer *opencl_set_kernel_argument(
 	const char *arg_name, int arg_index, int read_only_scalar)
 {
 	p = isl_printer_start_line(p);
-	if (info->options->opencl_pencil_runtime)
-		p = isl_printer_print_str(p, "opencl_set_kernel_arg(");
-	else
-		p = isl_printer_print_str(p,
-				"openclCheckReturn(clSetKernelArg(");
+	p = isl_printer_print_str(p, "opencl_set_kernel_arg(");
 	p = isl_printer_print_str(p, "kernel");
 	p = isl_printer_print_int(p, kernel_id);
 	p = isl_printer_print_str(p, ", ");
@@ -376,15 +355,11 @@ static __isl_give isl_printer *opencl_set_kernel_argument(
 
 	p = isl_printer_print_str(p, arg_name);
 
-	if (info->options->opencl_pencil_runtime) {
-		if (read_only_scalar)
-			p = isl_printer_print_str(p, ", 0");
-		else
-			p = isl_printer_print_str(p, ", 1");
-	}
+	if (read_only_scalar)
+		p = isl_printer_print_str(p, ", 0");
+	else
+		p = isl_printer_print_str(p, ", 1");
 
-	if (!info->options->opencl_pencil_runtime)
-		p = isl_printer_print_str(p, ")");
 	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
 
@@ -434,8 +409,8 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 		if (empty)
 			continue;
 		ro = gpu_array_is_read_only_scalar(&prog->array[i]);
-		opencl_set_kernel_argument(p, info, kernel->id,
-			prog->array[i].name, arg_index, ro);
+		opencl_set_kernel_argument(
+			p, info, kernel->id, prog->array[i].name, arg_index, ro);
 		arg_index++;
 	}
 
@@ -445,8 +420,7 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 		const char *name;
 
 		name = isl_space_get_dim_name(space, isl_dim_param, i);
-		opencl_set_kernel_argument(p, info, kernel->id, name,
-			arg_index, 1);
+		opencl_set_kernel_argument(p, info, kernel->id, name, arg_index, 1);
 		arg_index++;
 	}
 	isl_space_free(space);
@@ -456,8 +430,7 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 		const char *name;
 
 		name = isl_space_get_dim_name(kernel->space, isl_dim_set, i);
-		opencl_set_kernel_argument(p, info, kernel->id, name,
-			arg_index, 1);
+		opencl_set_kernel_argument(p, info, kernel->id, name, arg_index, 1);
 		arg_index++;
 	}
 
@@ -860,31 +833,6 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
 /* Copy "array" from the host to the device (to_host = 0) or
  * back from the device to the host (to_host = 1).
  */
-static __isl_give isl_printer *opencl_copy_array(__isl_take isl_printer *p,
-	struct gpu_array_info *array, int to_host)
-{
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "openclCheckReturn(");
-	if (to_host)
-		p = isl_printer_print_str(p, "clEnqueueReadBuffer");
-	else
-		p = isl_printer_print_str(p, "clEnqueueWriteBuffer");
-	p = isl_printer_print_str(p, "(queue, dev_");
-	p = isl_printer_print_str(p, array->name);
-	p = isl_printer_print_str(p, ", CL_TRUE, 0, ");
-	p = gpu_array_info_print_size(p, array);
-
-	if (gpu_array_is_scalar(array))
-		p = isl_printer_print_str(p, ", &");
-	else
-		p = isl_printer_print_str(p, ", ");
-	p = isl_printer_print_str(p, array->name);
-	p = isl_printer_print_str(p, ", 0, NULL, NULL));");
-	p = isl_printer_end_line(p);
-
-	return p;
-}
-
 static __isl_give isl_printer *pencil_runtime_copy_array(
 	__isl_take isl_printer *p, struct gpu_array_info *array, int to_host)
 {
@@ -918,10 +866,7 @@ static __isl_give isl_printer *copy_array_to_device(__isl_take isl_printer *p,
 {
 	struct copy_array_data_opencl *data = user;
 
-	if (data->opencl->options->opencl_pencil_runtime)
-		return pencil_runtime_copy_array(p, data->array, 0);
-	else
-		return opencl_copy_array(p, data->array, 0);
+	return pencil_runtime_copy_array(p, data->array, 0);
 }
 
 /* Copy "array" back from the device to the host.
@@ -931,10 +876,7 @@ static __isl_give isl_printer *copy_array_from_device(__isl_take isl_printer *p,
 {
 	struct copy_array_data_opencl *data = user;
 
-	if (data->opencl->options->opencl_pencil_runtime)
-		return pencil_runtime_copy_array(p, data->array, 1);
-	else
-		return opencl_copy_array(p, data->array, 1);
+	return pencil_runtime_copy_array(p, data->array, 1);
 }
 
 /* Copy the "copy" arrays from the host to the device (to_host = 0) or
@@ -950,7 +892,7 @@ static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
 
 	for (i = 0; i < prog->n_array; ++i) {
 		struct gpu_array_info *array = &prog->array[i];
-		struct copy_array_data_opencl copy_data = { info, array };
+		struct copy_array_data_opencl copy_data = {info, array};
 		isl_space *space;
 		isl_set *copy_i;
 		isl_set *guard;
@@ -968,9 +910,8 @@ static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
 
 		guard = gpu_array_positive_size_guard(array);
 		p = ppcg_print_guarded(p, guard, isl_set_copy(prog->context),
-					to_host ? &copy_array_from_device :
-						  &copy_array_to_device,
-					&copy_data);
+			to_host ? &copy_array_from_device : &copy_array_to_device,
+			&copy_data);
 	}
 
 	p = isl_printer_start_line(p);
@@ -981,8 +922,7 @@ static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
 /* Copy the prog->copy_in arrays from the host to the device.
  */
 static __isl_give isl_printer *opencl_copy_arrays_to_device(
-	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct opencl_info *info)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
 	return opencl_copy_arrays(p, prog, prog->copy_in, 0, info);
 }
@@ -990,8 +930,7 @@ static __isl_give isl_printer *opencl_copy_arrays_to_device(
 /* Copy the prog->copy_out arrays back from the device to the host.
  */
 static __isl_give isl_printer *opencl_copy_arrays_from_device(
-	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct opencl_info *info)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
 	return opencl_copy_arrays(p, prog, prog->copy_out, 1, info);
 }
@@ -1064,73 +1003,33 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_print_str(p, "};");
 	p = isl_printer_end_line(p);
 
-	if (data->opencl->options->opencl_pencil_runtime) {
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "pencil_cl_kernel kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, " = opencl_create_kernel(program, "
-								"\"kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, "\");");
-		p = isl_printer_end_line(p);
-	} else {
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "cl_kernel kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, " = clCreateKernel(program, "
-								"\"kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, "\", &err);");
-		p = isl_printer_end_line(p);
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "openclCheckReturn(err);");
-		p = isl_printer_end_line(p);
-	}
+	p = isl_printer_start_line(p);
+	p = isl_printer_print_str(p, "pencil_cl_kernel kernel");
+	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, " = opencl_create_kernel(program, "
+								 "\"kernel");
+	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, "\");");
+	p = isl_printer_end_line(p);
 
 	opencl_set_kernel_arguments(p, data->prog, kernel, data->opencl);
 
-	if (data->opencl->options->opencl_pencil_runtime) {
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "opencl_launch_kernel(kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, ", ");
-		if (kernel->n_block > 0)
-			p = isl_printer_print_int(p, kernel->n_block);
-		else
-			p = isl_printer_print_int(p, 1);
-		p = isl_printer_print_str(p,
-				", NULL, global_work_size, block_size);");
-		p = isl_printer_end_line(p);
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "opencl_release_kernel(kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, ");");
-		p = isl_printer_end_line(p);
-	} else {
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p,
-			"openclCheckReturn(clEnqueueNDRangeKernel"
-		 	"(queue, kernel");
-	 	p = isl_printer_print_int(p, kernel->id);
-	 	p = isl_printer_print_str(p, ", ");
-		if (kernel->n_block > 0)
-			p = isl_printer_print_int(p, kernel->n_block);
-		else
-			p = isl_printer_print_int(p, 1);
-		p = isl_printer_print_str(p, ", NULL, global_work_size, "
-						"block_size, "
-						"0, NULL, NULL));");
-		p = isl_printer_end_line(p);
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p,
-			"openclCheckReturn(clReleaseKernel(kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, "));");
-		p = isl_printer_end_line(p);
-		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "clFinish(queue);");
-		p = isl_printer_end_line(p);
-	}
+	p = isl_printer_start_line(p);
+	p = isl_printer_print_str(p, "opencl_launch_kernel(kernel");
+	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, ", ");
+	if (kernel->n_block > 0)
+		p = isl_printer_print_int(p, kernel->n_block);
+	else
+		p = isl_printer_print_int(p, 1);
+	p = isl_printer_print_str(p, ", NULL, global_work_size, block_size);");
+	p = isl_printer_end_line(p);
+	p = isl_printer_start_line(p);
+	p = isl_printer_print_str(p, "opencl_release_kernel(kernel");
+	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, ");");
+	p = isl_printer_end_line(p);
+
 	p = isl_printer_indent(p, -2);
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "}");
@@ -1165,101 +1064,15 @@ static __isl_give isl_printer *opencl_print_host_code(
 	return p;
 }
 
-/* Create an OpenCL device, context, command queue and build the kernel.
- * input is the name of the input file provided to ppcg.
- */
-static __isl_give isl_printer *opencl_setup(__isl_take isl_printer *p,
-	const char *input, struct opencl_info *info)
-{
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "cl_device_id device;");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "cl_context context;");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "cl_program program;");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "cl_command_queue queue;");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "cl_int err;");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "device = opencl_create_device(");
-	p = isl_printer_print_int(p, info->options->opencl_use_gpu);
-	p = isl_printer_print_str(p, ");");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "context = clCreateContext(NULL, 1, "
-		"&device, NULL, NULL, &err);");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "openclCheckReturn(err);");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "queue = clCreateCommandQueue"
-					"(context, device, 0, &err);");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "openclCheckReturn(err);");
-	p = isl_printer_end_line(p);
-
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "program = ");
-
-	if (info->options->opencl_embed_kernel_code) {
-		p = isl_printer_print_str(p, "opencl_build_program_from_string("
-						"context, device, kernel_code, "
-						"sizeof(kernel_code), \"");
-	} else {
-		p = isl_printer_print_str(p, "opencl_build_program_from_file("
-						"context, device, \"");
-		p = isl_printer_print_str(p, info->kernel_c_name);
-		p = isl_printer_print_str(p, "\", \"");
-	}
-
-	if (info->options->opencl_compiler_options)
-		p = isl_printer_print_str(p,
-					info->options->opencl_compiler_options);
-
-	p = isl_printer_print_str(p, "\");");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_end_line(p);
-
-	return p;
-}
-
-static __isl_give isl_printer *opencl_release_cl_objects(
-	__isl_take isl_printer *p, struct opencl_info *info)
-{
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "openclCheckReturn(clReleaseCommandQueue"
-					"(queue));");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "openclCheckReturn(clReleaseProgram"
-					"(program));");
-	p = isl_printer_end_line(p);
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "openclCheckReturn(clReleaseContext"
-					"(context));");
-	p = isl_printer_end_line(p);
-
-	return p;
-}
-
-static __isl_give isl_printer *pencil_runtime_setup(__isl_take isl_printer *p,
-	const char *input, struct opencl_info *info)
+static __isl_give isl_printer *pencil_runtime_setup(
+	__isl_take isl_printer *p, const char *input, struct opencl_info *info)
 {
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "pencil_cl_program program;");
 	p = isl_printer_end_line(p);
 
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "pencil_init();");
+	p = isl_printer_print_str(p, "pencil_init(PENCIL_TARGET_DEVICE_DYNAMIC);");
 	p = isl_printer_end_line(p);
 
 	p = isl_printer_start_line(p);
@@ -1268,25 +1081,23 @@ static __isl_give isl_printer *pencil_runtime_setup(__isl_take isl_printer *p,
 	if (info->options->opencl_embed_kernel_code) {
 		p = isl_printer_print_str(p,
 			"opencl_create_program_from_string(kernel_code, "
-						"sizeof(kernel_code), \"");
+			"sizeof(kernel_code), \"");
 	} else {
 		p = isl_printer_print_str(p, "opencl_create_program_from_file("
-						"\"");
+									 "\"");
 		p = isl_printer_print_str(p, info->kernel_c_name);
 		p = isl_printer_print_str(p, "\", \"");
 	}
 
 	if (info->options->opencl_compiler_options)
-		p = isl_printer_print_str(p,
-					info->options->opencl_compiler_options);
+		p = isl_printer_print_str(p, info->options->opencl_compiler_options);
 
 	p = isl_printer_print_str(p, "\");");
 	p = isl_printer_end_line(p);
 	return p;
 }
 
-static __isl_give isl_printer *pencil_runtime_release(
-	__isl_take isl_printer *p)
+static __isl_give isl_printer *pencil_runtime_release(__isl_take isl_printer *p)
 {
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "pencil_shutdown();");
@@ -1301,14 +1112,8 @@ static __isl_give isl_printer *release_device_array(__isl_take isl_printer *p,
 	struct gpu_array_info *array, struct opencl_info *info)
 {
 	p = isl_printer_start_line(p);
-	if (info->options->opencl_pencil_runtime)
-		p = isl_printer_print_str(p, "opencl_release_buffer(dev_");
-	else
-		p = isl_printer_print_str(p,
-			"openclCheckReturn(clReleaseMemObject(dev_");
+	p = isl_printer_print_str(p, "opencl_release_buffer(dev_");
 	p = isl_printer_print_str(p, array->name);
-	if (!info->options->opencl_pencil_runtime)
-		p = isl_printer_print_str(p, ")");
 	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
 
@@ -1318,8 +1123,7 @@ static __isl_give isl_printer *release_device_array(__isl_take isl_printer *p,
 /* Free the device arrays.
  */
 static __isl_give isl_printer *opencl_release_device_arrays(
-	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct opencl_info *info)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
 	int i;
 
@@ -1358,10 +1162,7 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 
 	p = opencl_declare_device_arrays(p, prog, opencl);
 
-	if (opencl->options->opencl_pencil_runtime)
-		p = pencil_runtime_setup(p, opencl->input, opencl);
-	else
-		p = opencl_setup(p, opencl->input, opencl);
+	p = pencil_runtime_setup(p, opencl->input, opencl);
 
 	p = opencl_allocate_device_arrays(p, prog, opencl);
 	p = opencl_copy_arrays_to_device(p, prog, opencl);
@@ -1371,10 +1172,7 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	p = opencl_copy_arrays_from_device(p, prog, opencl);
 	p = opencl_release_device_arrays(p, prog, opencl);
 
-	if (opencl->options->opencl_pencil_runtime)
-		p = pencil_runtime_release(p);
-	else
-		p = opencl_release_cl_objects(p, opencl);
+	p = pencil_runtime_release(p);
 
 	p = ppcg_end_block(p);
 

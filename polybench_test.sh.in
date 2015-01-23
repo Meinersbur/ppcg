@@ -79,7 +79,7 @@ run_tests () {
 				-o $prog_opt $DIR/utilities/polybench.c \
 				$CFLAGS $cc_options
 		fi
-		$CC -I $DIR/$dir $CPPFLAGS $source_opt -o $prog_opt \
+		libtool --mode=link $CC -I $DIR/$dir $CPPFLAGS $source_opt -o $prog_opt \
 			$DIR/utilities/polybench.c $CFLAGS $cc_options || exit
 
 		$prog_opt 2> $output_opt
@@ -100,9 +100,15 @@ else
 	echo Compiler does not support OpenMP. Skipping OpenMP tests.
 fi
 
-if [ $HAVE_OPENCL = "yes" ]; then
-	run_tests ppcg_opencl "--target=opencl --opencl-no-use-gpu" \
-				"$srcdir/ocl_utilities.c -lOpenCL"
+if [ "x@OPENCL_TESTS_ENABLED@" = "xyes" ]; then
+    if [ "x@PENCIL_UTIL_BUILDDIR@" = "x" ]; then
+        CPPFLAGS_RUNTIME=""
+        LDFLAGS_RUNTIME=""
+    else
+        CPPFLAGS_RUNTIME="-I@PENCIL_UTIL_SRCDIR@/include -I@PENCIL_UTIL_SRCDIR@/runtime"
+        LDFLAGS_RUNTIME="-L@PENCIL_UTIL_BUILDDIR@/runtime/.libs" 
+    fi
+	run_tests ppcg_opencl "--target=opencl ${CPPFLAGS_RUNTIME}" "${CPPFLAGS_RUNTIME} ${LDFLAGS_RUNTIME} -locl_pencil_opt -lOpenCL"
 fi
 
 if [ $keep = "no" ]; then
