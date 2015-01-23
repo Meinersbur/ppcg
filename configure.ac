@@ -50,6 +50,9 @@ system)
 	;;
 esac
 
+AX_SUBMODULE(pencil-util,no|build|bundled|system,bundled)
+AM_CONDITIONAL(BUNDLED_PENCIL_UTIL, test $with_pencil_util = bundled)
+
 AC_SUBST(POLYBENCH_DIR)
 AC_SUBST(extra_tests)
 AC_ARG_WITH([polybench],
@@ -72,6 +75,9 @@ if test $with_isl = bundled; then
 fi
 if test $with_pet = bundled; then
 	AC_CONFIG_SUBDIRS(pet)
+fi
+if test $with_pencil_util = bundled; then
+	AC_CONFIG_SUBDIRS(pencil-util)
 fi
 AC_CONFIG_COMMANDS_POST([
 	dnl pass on arguments to subdir configures, but don't
