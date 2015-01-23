@@ -44,16 +44,13 @@ struct ppcg_options {
 
 	/* Options to pass to the OpenCL compiler.  */
 	char *opencl_compiler_options;
-	/* Prefer GPU device over CPU. */
-	int opencl_use_gpu;
+
 	/* Number of files to include. */
 	int opencl_n_include_file;
 	/* Files to include. */
 	const char **opencl_include_files;
 	/* Embed OpenCL kernel code in host code. */
 	int opencl_embed_kernel_code;
-	/* Use OpenCL PENCIL runtime. */
-	int opencl_pencil_runtime;
 };
 
 ISL_ARG_DECL(ppcg_debug_options, struct ppcg_debug_options,

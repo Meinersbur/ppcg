@@ -9,9 +9,6 @@ AC_PROG_LIBTOOL
 PKG_PROG_PKG_CONFIG
 
 AX_CHECK_OPENCL
-if test $HAVE_OPENCL = yes; then
-	extra_tests="$extra_tests opencl_test.sh"
-fi
 
 AX_SUBMODULE(isl,build|bundled|system,bundled)
 AM_CONDITIONAL(BUNDLED_ISL, test $with_isl = bundled)
@@ -52,9 +49,38 @@ esac
 
 AX_SUBMODULE(pencil-util,no|build|bundled|system,bundled)
 AM_CONDITIONAL(BUNDLED_PENCIL_UTIL, test $with_pencil_util = bundled)
+AC_SUBST(PENCIL_UTIL_SRCDIR)
+AC_SUBST(PENCIL_UTIL_BUILDDIR)
+AC_SUBST(OPENCL_TESTS_ENABLED)
+AC_SUBST(extra_tests)
+case "$with_pencil_util" in
+no)
+	;;
+bundled)
+    PENCIL_UTIL_BUILDDIR=`pwd`/pencil-util
+    PENCIL_UTIL_SRCDIR="${srcdir}/pencil-util"
+	if test $HAVE_OPENCL = yes; then
+        extra_tests="$extra_tests opencl_test.sh"
+        OPENCL_TESTS_ENABLED="yes"
+    fi
+	;;
+build)
+    PENCIL_UTIL_BUILDDIR=`echo @abs_builddir@ | $with_pencil_util_builddir/config.status --file=-`
+    PENCIL_UTIL_SRCDIR=`echo @abs_srcdir@ | $with_pencil_util_builddir/config.status --file=-`
+    if test $HAVE_OPENCL = yes; then
+        extra_tests="$extra_tests opencl_test.sh"
+        OPENCL_TESTS_ENABLED="yes"
+    fi
+	;;
+system)
+    if test $HAVE_OPENCL = yes; then
+        extra_tests="$extra_tests opencl_test.sh"
+        OPENCL_TESTS_ENABLED="yes"
+    fi
+	;;
+esac
 
 AC_SUBST(POLYBENCH_DIR)
-AC_SUBST(extra_tests)
 AC_ARG_WITH([polybench],
 	[AS_HELP_STRING([--with-polybench=DIR], [PolyBench location])],
 	[

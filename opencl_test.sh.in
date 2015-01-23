@@ -44,9 +44,15 @@ run_tests () {
 			options="$options --opencl-include-file=$functions"
 			options="$options --opencl-compiler-options=-I."
 		fi
-		./ppcg$EXEEXT $options $i -o "$out_c" || exit
-		$CC $CFLAGS "$srcdir/ocl_utilities.c" -lOpenCL -I. "$out_c" \
-			-o "$out" || exit
+		if test "x@PENCIL_UTIL_BUILDDIR@" = "x"; then
+            CPPFLAGS_RUNTIME=""
+            LDFLAGS_RUNTIME=""
+		else
+            CPPFLAGS_RUNTIME="-I@PENCIL_UTIL_SRCDIR@/include -I@PENCIL_UTIL_SRCDIR@/runtime"
+            LDFLAGS_RUNTIME="-L@PENCIL_UTIL_BUILDDIR@/runtime/.libs" 
+		fi
+		./ppcg$EXEEXT ${CPPFLAGS_RUNTIME} $options $i -o "$out_c" || exit
+		libtool --mode=link $CC $CFLAGS ${CPPFLAGS_RUNTIME} ${LDFLAGS_RUNTIME} "$out_c" -locl_pencil_opt -lOpenCL -o "$out" || exit
 		$out || exit
 	done
 }
