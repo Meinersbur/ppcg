@@ -7,11 +7,8 @@ if BUNDLED_PET
     MAYBE_PET = pet
     PET_LA = $(top_builddir)/pet/libpet.la
 endif
-if BUNDLED_PENCIL_UTIL
-    MAYBE_PENCIL_UTIL = pencil-util
-endif
 
-SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET) $(MAYBE_PENCIL_UTIL) .
+SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET) $(PENCIL_UTIL_SUBDIR)
 
 FORCE:
 isl/libisl.la: FORCE

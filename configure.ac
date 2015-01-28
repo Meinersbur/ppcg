@@ -3,6 +3,7 @@ AC_CONFIG_AUX_DIR([.])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign])
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
+AM_MAINTAINER_MODE([enable])
 
 AC_PROG_CC
 AC_PROG_LIBTOOL
@@ -47,38 +48,42 @@ system)
 	;;
 esac
 
+dnl pencil-util submodule
 AX_SUBMODULE(pencil-util,no|build|bundled|system,bundled)
-AM_CONDITIONAL(BUNDLED_PENCIL_UTIL, test $with_pencil_util = bundled)
 AC_SUBST(PENCIL_UTIL_SRCDIR)
 AC_SUBST(PENCIL_UTIL_BUILDDIR)
 AC_SUBST(OPENCL_TESTS_ENABLED)
+AC_SUBST(PENCIL_UTIL_SUBDIR)
+PENCIL_UTIL_SUBDIR=
 AC_SUBST(extra_tests)
 case "$with_pencil_util" in
 no)
 	;;
 bundled)
-    PENCIL_UTIL_BUILDDIR=`pwd`/pencil-util
-    PENCIL_UTIL_SRCDIR="${srcdir}/pencil-util"
+	PENCIL_UTIL_SUBDIR=pencil-util
+	PENCIL_UTIL_BUILDDIR=`pwd`/pencil-util
+	PENCIL_UTIL_SRCDIR="${srcdir}/pencil-util"
 	if test $HAVE_OPENCL = yes; then
-        extra_tests="$extra_tests opencl_test.sh"
-        OPENCL_TESTS_ENABLED="yes"
-    fi
+		extra_tests="$extra_tests opencl_test.sh"
+		OPENCL_TESTS_ENABLED="yes"
+	fi
 	;;
 build)
-    PENCIL_UTIL_BUILDDIR=`echo @abs_builddir@ | $with_pencil_util_builddir/config.status --file=-`
-    PENCIL_UTIL_SRCDIR=`echo @abs_srcdir@ | $with_pencil_util_builddir/config.status --file=-`
-    if test $HAVE_OPENCL = yes; then
-        extra_tests="$extra_tests opencl_test.sh"
-        OPENCL_TESTS_ENABLED="yes"
-    fi
+	PENCIL_UTIL_BUILDDIR=`echo @abs_builddir@ | $with_pencil_util_builddir/config.status --file=-`
+	PENCIL_UTIL_SRCDIR=`echo @abs_srcdir@ | $with_pencil_util_builddir/config.status --file=-`
+	if test $HAVE_OPENCL = yes; then
+		extra_tests="$extra_tests opencl_test.sh"
+		OPENCL_TESTS_ENABLED="yes"
+	fi
 	;;
 system)
-    if test $HAVE_OPENCL = yes; then
-        extra_tests="$extra_tests opencl_test.sh"
-        OPENCL_TESTS_ENABLED="yes"
-    fi
+	if test $HAVE_OPENCL = yes; then
+		extra_tests="$extra_tests opencl_test.sh"
+		OPENCL_TESTS_ENABLED="yes"
+	fi
 	;;
 esac
+
 
 AC_SUBST(POLYBENCH_DIR)
 AC_ARG_WITH([polybench],
