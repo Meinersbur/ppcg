@@ -1,28 +1,49 @@
+# Automake
+Makefile.in
+Makefile
+.dirstamp
+
+# Autoconf
+/build-aux/
+/autom4te.cache/
+/aclocal.m4
+/compile
+/configure
+/depcomp
+/install-sh
+/missing
+/stamp-h1
+/config.log
+/config.status
+/config.guess
+/config.sub
+
+# Libtool
+/libtool
+/ltmain.sh
+/m4/libtool.m4
+/m4/ltoptions.m4
+/m4/ltversion.m4
+/m4/lt~obsolete.m4
+/m4/ltsugar.m4
 .deps/
 .libs/
-Makefile
-Makefile.in
-aclocal.m4
-autom4te.cache/
-compile
-config.guess
-config.log
-config.status
-config.sub
-configure
-depcomp
-gitversion.h
-install-sh
-libtool
-ltmain.sh
-m4/libtool.m4
-m4/ltoptions.m4
-m4/ltsugar.m4
-m4/ltversion.m4
-m4/lt~obsolete.m4
-missing
-ppcg
-test-driver
+*.la
+*.lo
 
+# KDE Dolphin
+.directory
+
+# AC_CONFIG_FILES
 opencl_test.sh
 polybench_test.sh
+
+# Make
+*.o
+/gitversion.h
+/ppcg
+
+/test-driver
+/test-suite.log
+/opencl_test.log
+/opencl_test.trs
