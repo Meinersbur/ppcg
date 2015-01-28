@@ -1,0 +1,16 @@
+
+BasedOnStyle: Google
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: Always
+BreakBeforeBraces: Stroustrup 
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+DerivePointerAlignment: false
+PointerAlignment: Right
+BinPackParameters: true
+BinPackArguments: true
+AlignAfterOpenBracket: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AlwaysBreakBeforeMultilineStrings: false
