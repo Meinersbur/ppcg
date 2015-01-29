@@ -53,8 +53,9 @@ EXTRA_TESTS = opencl_test.sh polybench_test.sh
 TEST_EXTENSIONS = .sh
 
 EXTRA_DIST = \
-	tests
-	
+	tests \
+	autogen.sh
+
 CLEANFILES = gitversion.h
 
 dist-hook:
