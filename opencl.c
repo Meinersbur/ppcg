@@ -852,6 +852,7 @@ static __isl_give isl_printer *pencil_runtime_copy_array(
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
+	return p;
 }
 
 struct copy_array_data_opencl {
