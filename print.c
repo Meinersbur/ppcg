@@ -159,6 +159,7 @@ static __isl_give isl_printer *print_guarded_user(__isl_take isl_printer *p,
 __isl_give isl_printer *ppcg_print_guarded(__isl_take isl_printer *p,
 	__isl_take isl_set *guard, __isl_take isl_set *context,
 	__isl_give isl_printer *(*fn)(__isl_take isl_printer *p, void *user),
+	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user),
 	void *user)
 {
 	struct ppcg_print_guarded_data data = { fn, user };
@@ -178,6 +179,7 @@ __isl_give isl_printer *ppcg_print_guarded(__isl_take isl_printer *p,
 	options = isl_ast_print_options_alloc(ctx);
 	options = isl_ast_print_options_set_print_user(options,
 						&print_guarded_user, &data);
+	options = isl_ast_print_options_set_print_expr(options, print_expr, user);
 	p = isl_ast_node_print(tree, p, options);
 	isl_ast_node_free(tree);
 
