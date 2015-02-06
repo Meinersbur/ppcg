@@ -412,7 +412,8 @@ error:
 /* Code generate the scop 'scop' and print the corresponding C code to 'p'.
  */
 static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
-	__isl_take isl_printer *p, struct ppcg_options *options)
+	__isl_take isl_printer *p, struct ppcg_options *options,
+	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user), void *user)
 {
 	isl_ctx *ctx = isl_printer_get_ctx(p);
 	isl_set *context;
@@ -453,7 +454,10 @@ static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
 	print_options = isl_ast_print_options_set_print_for(print_options,
 							&print_for, NULL);
 
-	p = isl_ast_node_print_macros(tree, p);
+	print_options = isl_ast_print_options_set_print_expr(print_options, print_expr, user);
+
+	if (!print_expr)
+		p = isl_ast_node_print_macros(tree, p);
 	p = isl_ast_node_print(tree, p, print_options);
 
 	isl_ast_node_free(tree);
@@ -483,7 +487,8 @@ static int any_hidden_declarations(struct ppcg_scop *scop)
  * to "p", including variable declarations.
  */
 __isl_give isl_printer *print_cpu(__isl_take isl_printer *p,
-	struct ppcg_scop *ps, struct ppcg_options *options)
+	struct ppcg_scop *ps, struct ppcg_options *options,
+	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user), void *user)
 {
 	int hidden;
 
@@ -500,7 +505,7 @@ __isl_give isl_printer *print_cpu(__isl_take isl_printer *p,
 		p = ppcg_start_block(p);
 		p = ppcg_print_hidden_declarations(p, ps);
 	}
-	p = print_scop(ps, p, options);
+	p = print_scop(ps, p, options, print_expr, user);
 	if (hidden)
 		p = ppcg_end_block(p);
 
@@ -514,7 +519,7 @@ static __isl_give isl_printer *print_cpu_wrap(__isl_take isl_printer *p,
 {
 	struct ppcg_options *options = user;
 
-	return print_cpu(p, scop, options);
+	return print_cpu(p, scop, options, NULL, NULL);
 }
 
 /* Transform the code in the file called "input" by replacing

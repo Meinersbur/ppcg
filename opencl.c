@@ -110,6 +110,18 @@ static int opencl_open_files(struct opencl_info *info)
 		info->kprinter = isl_printer_print_str(info->kprinter, ">\n");
 	}
 
+	info->kprinter = isl_printer_print_str(info->kprinter,
+			"\n"
+			"/** floored division (round to negative infinity),\n"
+			"   potentially called by ppcg generated code      */\n"
+			"int __ppcg_floord(int n, uint d)\n"
+			"{\n"
+			"    if (n<0)\n"
+			"        return -((-n+d-1)/d);\n"
+			"    return n/d;\n"
+			"}\n"
+			"\n");
+
 	return 0;
 }
 
@@ -200,7 +212,7 @@ static int opencl_close_files(struct opencl_info *info)
 
 	return r;
 }
-
+#if 0
 static __isl_give isl_printer *opencl_print_host_macros(
 	__isl_take isl_printer *p)
 {
@@ -220,7 +232,7 @@ static __isl_give isl_printer *opencl_print_host_macros(
 
 	return p;
 }
-
+#endif
 static __isl_give isl_printer *opencl_declare_device_arrays(
 	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
@@ -731,7 +743,7 @@ static __isl_give isl_printer *opencl_print_kernel(struct gpu_prog *prog,
 	p = opencl_print_kernel_iterators(p, kernel);
 	p = opencl_print_kernel_vars(p, kernel);
 	p = isl_printer_end_line(p);
-	p = gpu_print_macros(p, kernel->tree);
+	//p = gpu_print_macros(p, kernel->tree);
 	p = isl_ast_node_print(kernel->tree, p, print_options);
 	p = isl_printer_indent(p, -4);
 	p = isl_printer_start_line(p);
@@ -761,7 +773,7 @@ struct print_host_user_data_opencl {
  * If (i > dim1) then the output is grid_sizes[i]
  */
 static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
-	__isl_take isl_printer *p, struct ppcg_kernel *kernel, int i)
+	__isl_take isl_printer *p, struct ppcg_kernel *kernel, int i, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options)
 {
 	int grid_dim, block_dim;
 	isl_pw_aff *bound_grid;
@@ -772,7 +784,11 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
 	if (i < min(grid_dim, block_dim)) {
 		bound_grid = isl_multi_pw_aff_get_pw_aff(kernel->grid_size, i);
 		p = isl_printer_print_str(p, "(");
-		p = isl_printer_print_pw_aff(p, bound_grid);
+
+		isl_ast_expr *expr = isl_ast_build_expr_from_pw_aff(build, isl_pw_aff_copy(bound_grid));
+		p = isl_ast_expr_print(expr, p, isl_ast_print_options_copy(options));
+		isl_ast_expr_free(expr);
+
 		p = isl_printer_print_str(p, ") * ");
 		p = isl_printer_print_int(p, kernel->block_dim[i]);
 		isl_pw_aff_free(bound_grid);
@@ -806,7 +822,7 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
  * this function, the user should multiply the elements of the list.
  */
 static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
-	__isl_take isl_printer *p, struct ppcg_kernel *kernel)
+	__isl_take isl_printer *p, struct ppcg_kernel *kernel, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options)
 {
 	int i;
 	int grid_dim, block_dim;
@@ -824,7 +840,7 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
 			p = isl_printer_print_str(p, ", ");
 
 		p = opencl_print_total_number_of_work_items_for_dim(p,
-			kernel, i);
+			kernel, i, build, options);
 	}
 
 	return p;
@@ -880,6 +896,52 @@ static __isl_give isl_printer *copy_array_from_device(__isl_take isl_printer *p,
 	return pencil_runtime_copy_array(p, data->array, 1);
 }
 
+
+static __isl_give isl_printer *print_expr(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user, char *funcnames[]) {
+	int nargs, i;
+	isl_ast_expr *arg;
+	enum isl_ast_expr_type exprtype = isl_ast_expr_get_type(expr);
+
+	if (exprtype == isl_ast_expr_op) {
+		enum isl_ast_op_type optype = isl_ast_expr_get_op_type(expr);
+		switch (optype) {
+		case isl_ast_op_fdiv_q:
+		case isl_ast_op_min:
+		case isl_ast_op_max:
+			nargs = isl_ast_expr_get_op_n_arg(expr);
+
+			for (i = 1; i < nargs; ++i) {
+				p = isl_printer_print_str(p, funcnames[optype]);
+				p = isl_printer_print_str(p, "(");
+			}
+			arg = isl_ast_expr_get_op_arg(expr, 0);
+			p = isl_ast_expr_print(arg, p, isl_ast_print_options_copy(options));
+			isl_ast_expr_free(arg);
+			for (i = 1; i < nargs; ++i) {
+				p = isl_printer_print_str(p, ", ");
+				arg = isl_ast_expr_get_op_arg(expr, i);
+				p = isl_ast_expr_print(arg, p, isl_ast_print_options_copy(options));
+				isl_ast_expr_free(arg);
+				p = isl_printer_print_str(p, ")");
+			}
+			isl_ast_print_options_free(options);
+			return p;
+		}
+	}
+	return isl_ast_expr_print_c(p, expr, options);
+}
+
+static char *hostside_funcnames[] = { [isl_ast_op_fdiv_q] "__ppcg_floord", [isl_ast_op_min] "__ppcg_min", [isl_ast_op_max] "__ppcg_max"};
+static __isl_give isl_printer *print_expr_hostside_callback(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,  void *user) {
+	return print_expr(p, options, expr, user, hostside_funcnames);
+}
+
+static char *opencl_funcnames[] = { [isl_ast_op_fdiv_q] "__ppcg_floord", [isl_ast_op_min] "min", [isl_ast_op_max] "max"};
+static __isl_give isl_printer *print_expr_opencl_callback(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,  void *user) {
+	return print_expr(p, options, expr, user, opencl_funcnames);
+}
+
+
 /* Copy the "copy" arrays from the host to the device (to_host = 0) or
  * back from the device to the host (to_host = 1).
  *
@@ -912,7 +974,7 @@ static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
 		guard = gpu_array_positive_size_guard(array);
 		p = ppcg_print_guarded(p, guard, isl_set_copy(prog->context),
 			to_host ? &copy_array_from_device : &copy_array_to_device,
-			&copy_data);
+			&print_expr_hostside_callback, &copy_data);
 	}
 
 	p = isl_printer_start_line(p);
@@ -966,12 +1028,14 @@ static __isl_give isl_printer *opencl_print_host_user(
 	isl_id *id;
 	struct ppcg_kernel *kernel;
 	struct print_host_user_data_opencl *data;
+	isl_ast_build *build;
 
 	id = isl_ast_node_get_annotation(node);
 	kernel = isl_id_get_user(id);
 	isl_id_free(id);
 
 	data = (struct print_host_user_data_opencl *) user;
+	build = isl_ast_build_from_context(isl_set_copy(data->prog->context));
 
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "{");
@@ -987,7 +1051,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 		p = isl_printer_print_int(p, 1);
 
 	p = isl_printer_print_str(p, "] = {");
-	p = opencl_print_total_number_of_work_items_as_list(p, kernel);
+	p = opencl_print_total_number_of_work_items_as_list(p, kernel, build, print_options);
 	p = isl_printer_print_str(p, "};");
 	p = isl_printer_end_line(p);
 
@@ -1042,6 +1106,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 	data->opencl->kprinter = opencl_print_kernel(data->prog, kernel,
 						data->opencl->kprinter);
 
+	isl_ast_build_free(build);
 	isl_ast_print_options_free(print_options);
 
 	return p;
@@ -1058,8 +1123,9 @@ static __isl_give isl_printer *opencl_print_host_code(
 	print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 				&opencl_print_host_user, &data);
+	print_options = isl_ast_print_options_set_print_expr(print_options,	&print_expr_hostside_callback, NULL);
 
-	p = gpu_print_macros(p, tree);
+	//p = gpu_print_macros(p, tree);
 	p = isl_ast_node_print(tree, p, print_options);
 
 	return p;
@@ -1161,7 +1227,7 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 
 	p = ppcg_start_block(p);
 
-	p = opencl_print_host_macros(p);
+	//p = opencl_print_host_macros(p);
 
 	p = opencl_declare_device_arrays(p, prog, opencl);
 
@@ -1206,7 +1272,7 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 
 	if (r >= 0)
 		r = generate_gpu(ctx, input, opencl.host_c, options,
-				&print_opencl, &opencl);
+				&print_opencl, &print_expr_opencl_callback, &opencl);
 
 	if (opencl_close_files(&opencl) < 0)
 		r = -1;
