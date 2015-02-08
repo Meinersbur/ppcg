@@ -248,7 +248,6 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
 		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
 		struct gpu_types *types, void *user),
-	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user),
-		void *user);
+		void *user, __isl_take isl_ast_print_options *host_print_options, int host_print_macros);
 
 #endif
