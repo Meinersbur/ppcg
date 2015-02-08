@@ -95,7 +95,7 @@ static __isl_give isl_printer *allocate_device_arrays(
 			"cudaCheckReturn(cudaMalloc((void **) &dev_");
 		p = isl_printer_print_str(p, prog->array[i].name);
 		p = isl_printer_print_str(p, ", ");
-		p = gpu_array_info_print_size(p, &prog->array[i]);
+		p = gpu_array_info_print_size(p, &prog->array[i], NULL, NULL);
 		p = isl_printer_print_str(p, "));");
 		p = isl_printer_end_line(p);
 	}
@@ -134,7 +134,7 @@ static __isl_give isl_printer *copy_arrays_to_device(__isl_take isl_printer *p,
 		p = isl_printer_print_str(p, prog->array[i].name);
 		p = isl_printer_print_str(p, ", ");
 
-		p = gpu_array_info_print_size(p, &prog->array[i]);
+		p = gpu_array_info_print_size(p, &prog->array[i], NULL, NULL);
 		p = isl_printer_print_str(p, ", cudaMemcpyHostToDevice));");
 		p = isl_printer_end_line(p);
 	}
@@ -238,7 +238,7 @@ static __isl_give isl_printer *print_kernel_arguments(__isl_take isl_printer *p,
 
 		if (types)
 			p = gpu_array_info_print_declaration_argument(p,
-				&prog->array[i], NULL);
+				&prog->array[i], NULL, NULL, NULL);
 		else
 			p = gpu_array_info_print_call_argument(p,
 				&prog->array[i]);
@@ -570,6 +570,7 @@ static __isl_give isl_printer *copy_arrays_from_device(
 {
 	int i;
 	isl_union_set *copy_out;
+
 	copy_out = isl_union_set_copy(prog->copy_out);
 
 	for (i = 0; i < prog->n_array; ++i) {
@@ -592,7 +593,7 @@ static __isl_give isl_printer *copy_arrays_from_device(
 		p = isl_printer_print_str(p, ", dev_");
 		p = isl_printer_print_str(p, prog->array[i].name);
 		p = isl_printer_print_str(p, ", ");
-		p = gpu_array_info_print_size(p, &prog->array[i]);
+		p = gpu_array_info_print_size(p, &prog->array[i], NULL, NULL);
 		p = isl_printer_print_str(p, ", cudaMemcpyDeviceToHost));");
 		p = isl_printer_end_line(p);
 	}
@@ -600,6 +601,7 @@ static __isl_give isl_printer *copy_arrays_from_device(
 	isl_union_set_free(copy_out);
 	p = isl_printer_start_line(p);
 	p = isl_printer_end_line(p);
+
 	return p;
 }
 
@@ -677,7 +679,7 @@ int generate_cuda(isl_ctx *ctx, struct ppcg_options *options,
 
 	cuda_open_files(&cuda, input);
 
-	r = generate_gpu(ctx, input, cuda.host_c, options, &print_cuda, NULL, &cuda);
+	r = generate_gpu(ctx, input, cuda.host_c, options, &print_cuda, &cuda, NULL, 1);
 
 	cuda_close_files(&cuda);
 

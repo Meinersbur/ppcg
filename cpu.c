@@ -412,15 +412,13 @@ error:
 /* Code generate the scop 'scop' and print the corresponding C code to 'p'.
  */
 static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
-	__isl_take isl_printer *p, struct ppcg_options *options,
-	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user), void *user)
+	__isl_take isl_printer *p, struct ppcg_options *options, void *user, __isl_take isl_ast_print_options *print_options, int print_macros)
 {
 	isl_ctx *ctx = isl_printer_get_ctx(p);
 	isl_set *context;
 	isl_union_set *domain_set;
 	isl_union_map *schedule_map;
 	isl_ast_build *build;
-	isl_ast_print_options *print_options;
 	isl_ast_node *tree;
 	struct ast_build_userinfo build_info;
 
@@ -447,16 +445,12 @@ static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
 	tree = isl_ast_build_ast_from_schedule(build, schedule_map);
 	isl_ast_build_free(build);
 
-	print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 							&print_user, NULL);
-
 	print_options = isl_ast_print_options_set_print_for(print_options,
 							&print_for, NULL);
 
-	print_options = isl_ast_print_options_set_print_expr(print_options, print_expr, user);
-
-	if (!print_expr)
+	if (print_macros)
 		p = isl_ast_node_print_macros(tree, p);
 	p = isl_ast_node_print(tree, p, print_options);
 
@@ -487,8 +481,7 @@ static int any_hidden_declarations(struct ppcg_scop *scop)
  * to "p", including variable declarations.
  */
 __isl_give isl_printer *print_cpu(__isl_take isl_printer *p,
-	struct ppcg_scop *ps, struct ppcg_options *options,
-	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user), void *user)
+	struct ppcg_scop *ps, struct ppcg_options *options, void *user, __isl_take isl_ast_print_options *print_options, int print_macros)
 {
 	int hidden;
 
@@ -505,7 +498,7 @@ __isl_give isl_printer *print_cpu(__isl_take isl_printer *p,
 		p = ppcg_start_block(p);
 		p = ppcg_print_hidden_declarations(p, ps);
 	}
-	p = print_scop(ps, p, options, print_expr, user);
+	p = print_scop(ps, p, options, user, print_options, print_macros);
 	if (hidden)
 		p = ppcg_end_block(p);
 
@@ -518,8 +511,9 @@ static __isl_give isl_printer *print_cpu_wrap(__isl_take isl_printer *p,
 	struct ppcg_scop *scop, void *user)
 {
 	struct ppcg_options *options = user;
+	isl_ast_print_options *print_options = isl_ast_print_options_alloc(isl_printer_get_ctx(p));
 
-	return print_cpu(p, scop, options, NULL, NULL);
+	return print_cpu(p, scop, options, NULL, print_options, 1);
 }
 
 /* Transform the code in the file called "input" by replacing

@@ -116,8 +116,10 @@ struct gpu_gen {
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
 		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
 		struct gpu_types *types, void *user);
-	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user);
 	void *print_user;
+
+	isl_ast_print_options *host_print_options;
+	int host_print_macros;
 
 	struct gpu_prog *prog;
 	/* The generated AST. */
@@ -5923,12 +5925,12 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	if (!gen->any_parallelism) {
 		isl_set_free(context);
 		isl_set_free(guard);
-		p = print_cpu(p, scop, options, gen->print_expr, gen);
+		p = print_cpu(p, scop, options, gen, isl_ast_print_options_copy(gen->host_print_options), gen->host_print_macros);
 	} else {
 		compute_copy_in_and_out(gen);
 		gen->tree = generate_host_code(gen);
 		p = ppcg_print_exposed_declarations(p, prog->scop);
-		p = ppcg_print_guarded(p, guard, context, &print_gpu, gen->print_expr, gen);
+		p = ppcg_print_guarded(p, guard, context, &print_gpu, gen, isl_ast_print_options_copy(gen->host_print_options));
 		isl_ast_node_free(gen->tree);
 	}
 
@@ -5957,8 +5959,7 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
 		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
 		struct gpu_types *types, void *user),
-	__isl_give isl_printer *(*print_expr)(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user),
-		void *user)
+		void *user, __isl_take isl_ast_print_options *print_cpu_options, int print_cpu_macros)
 {
 	struct gpu_gen gen;
 	int r;
@@ -5969,8 +5970,9 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	gen.options = options;
 	gen.kernel_id = 0;
 	gen.print = print;
-	gen.print_expr = print_expr;
 	gen.print_user = user;
+	gen.host_print_options = print_cpu_options;
+	gen.host_print_macros = print_cpu_macros;
 	gen.types.n = 0;
 	gen.types.name = NULL;
 
@@ -5986,6 +5988,7 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 		isl_union_map_free(gen.used_sizes);
 	}
 
+	isl_ast_print_options_free(print_cpu_options);
 	isl_union_map_free(gen.sizes);
 	for (i = 0; i < gen.types.n; ++i)
 		free(gen.types.name[i]);

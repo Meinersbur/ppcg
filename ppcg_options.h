@@ -53,6 +53,10 @@ struct ppcg_options {
 	int opencl_print_kernel_types;
 	/* Embed OpenCL kernel code in host code. */
 	int opencl_embed_kernel_code;
+
+	/* Generate native expressions only 
+	 * (no __ppcg_floord, __ppcg_min or __ppcg_max) */
+	int opencl_native_expr;
 };
 
 ISL_ARG_DECL(ppcg_debug_options, struct ppcg_debug_options,

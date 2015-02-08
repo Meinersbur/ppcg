@@ -39,6 +39,8 @@ ISL_ARG_BOOL(struct ppcg_options, opencl_print_kernel_types, 0,
 	"print definitions of types in the kernel file")
 ISL_ARG_BOOL(struct ppcg_options, opencl_embed_kernel_code, 0,
 	"embed-kernel-code", 0, "embed kernel code into host code")
+ISL_ARG_BOOL(struct ppcg_options, opencl_native_expr, 0,
+	"native-expr", 0, "generate code with native expressions only")
 ISL_ARGS_END
 
 ISL_ARGS_START(struct ppcg_options, ppcg_options_args)
