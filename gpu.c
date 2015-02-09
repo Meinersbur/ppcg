@@ -118,7 +118,10 @@ struct gpu_gen {
 		struct gpu_types *types, void *user);
 	void *print_user;
 
+	/* print options for how to print host code */
 	isl_ast_print_options *host_print_options;
+
+	/* Add preprocessor macros for floord, min, max? */
 	int host_print_macros;
 
 	struct gpu_prog *prog;

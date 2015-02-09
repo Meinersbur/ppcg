@@ -214,27 +214,7 @@ static int opencl_close_files(struct opencl_info *info)
 
 	return r;
 }
-#if 0
-static __isl_give isl_printer *opencl_print_host_macros(
-	__isl_take isl_printer *p)
-{
-	const char *macros =
-		"#define openclCheckReturn(ret) \\\n"
-		"  if (ret != CL_SUCCESS) {\\\n"
-		"    fprintf(stderr, \"OpenCL error: %s\\n\", "
-		"opencl_error_string(ret)); \\\n"
-		"    fflush(stderr); \\\n"
-		"    assert(ret == CL_SUCCESS);\\\n  }\n";
 
-	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, macros);
-	p = isl_printer_end_line(p);
-
-	p = isl_ast_op_type_print_macro(isl_ast_op_max, p);
-
-	return p;
-}
-#endif
 static __isl_give isl_printer *opencl_declare_device_arrays(
 	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info)
 {
@@ -746,11 +726,17 @@ static __isl_give isl_printer *opencl_enable_double_support(
 	return p;
 }
 
+/* custom function names for floord,min,max (defined in pencil_runtime.h) */
 static char *hostside_funcnames[] = {[isl_ast_op_fdiv_q] "__ppcg_floord",
 	[isl_ast_op_min] "__ppcg_min", [isl_ast_op_max] "__ppcg_max"};
+
+/* custom function names on the OpenCL side
+ * min and max are OpenCL standard function; __ppcg_floord is printed in the beginning of the .cl file */
 static char *opencl_funcnames[] = {[isl_ast_op_fdiv_q] "__ppcg_floord",
 	[isl_ast_op_min] "min", [isl_ast_op_max] "max"};
 
+/* Print an expression using custom function names
+ */
 static __isl_give isl_printer *print_expr(__isl_take isl_printer *p,
 	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
 	char *funcnames[])
@@ -790,6 +776,8 @@ static __isl_give isl_printer *print_expr(__isl_take isl_printer *p,
 	return isl_ast_expr_print_c(p, expr, options);
 }
 
+/* Print an isl_ast_expr of type min or max using the trinary ?: operator
+ */
 static __isl_give isl_printer *print_expr_native_minmax(
 	__isl_take isl_printer *p, __isl_keep isl_ast_print_options *options,
 	__isl_keep isl_ast_expr *expr, int from, int to)
@@ -824,6 +812,10 @@ static __isl_give isl_printer *print_expr_native_minmax(
 	return p;
 }
 
+/* Print an expression; min, max and floored division are printed using trinary expressions
+ *
+ * OpenCL features native min and max functions; if isopencl is true, those will be used instead.
+ */
 static __isl_give isl_printer *print_expr_native(__isl_take isl_printer *p,
 	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
 	int isopencl)
@@ -882,28 +874,36 @@ static __isl_give isl_printer *print_expr_native(__isl_take isl_printer *p,
 	return isl_ast_expr_print_c(p, expr, options);
 }
 
-static __isl_give isl_printer *print_expr_hostside(__isl_take isl_printer *p,
+/* Wrapper around print_expr to be usable as isl_ast_expr print callback.
+ */
+static __isl_give isl_printer *print_expr_hostside_wrap(__isl_take isl_printer *p,
 	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
 	void *user)
 {
 	return print_expr(p, options, expr, hostside_funcnames);
 }
 
-static __isl_give isl_printer *print_expr_opencl(__isl_take isl_printer *p,
+/* Wrapper around print_expr to be usable as isl_ast_expr print callback. Use OpenCL min,max builtins.
+ */
+static __isl_give isl_printer *print_expr_opencl_wrap(__isl_take isl_printer *p,
 	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
 	void *user)
 {
 	return print_expr(p, options, expr, opencl_funcnames);
 }
 
-static __isl_give isl_printer *print_expr_nativec(__isl_take isl_printer *p,
+/* Wrapper around print_expr to be usable as isl_ast_expr print callback. Use the trinary operator.
+ */
+static __isl_give isl_printer *print_expr_nativec_wrap(__isl_take isl_printer *p,
 	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
 	void *user)
 {
 	return print_expr_native(p, options, expr, 0);
 }
 
-static __isl_give isl_printer *print_expr_nativeopencl(
+/* Wrapper around print_expr to be usable as isl_ast_expr print callback. Use the trinary operator for floored division, but min,max builtins.
+ */
+static __isl_give isl_printer *print_expr_nativeopencl_wrap(
 	__isl_take isl_printer *p, __isl_take isl_ast_print_options *options,
 	__isl_keep isl_ast_expr *expr, void *user)
 {
@@ -915,27 +915,27 @@ static __isl_give isl_printer *opencl_print_kernel(struct gpu_prog *prog,
 	struct ppcg_options *ppcg_options, __isl_keep isl_ast_build *build)
 {
 	isl_ctx *ctx = isl_ast_node_get_ctx(kernel->tree);
-	isl_ast_print_options *print_options;
+	isl_ast_print_options *cl_print_options;
 
 	// This is the .cl file, we have another OpenCL-compatible set of print
 	// options
-	print_options = isl_ast_print_options_alloc(ctx);
-	print_options = isl_ast_print_options_set_print_user(print_options,
+	cl_print_options = isl_ast_print_options_alloc(ctx);
+	cl_print_options = isl_ast_print_options_set_print_user(cl_print_options,
 				&opencl_print_kernel_stmt, NULL);
-	print_options = isl_ast_print_options_set_print_expr(print_options,
-		ppcg_options->opencl_native_expr ? &print_expr_nativeopencl
-										 : &print_expr_opencl,
+	cl_print_options = isl_ast_print_options_set_print_expr(cl_print_options,
+		ppcg_options->opencl_native_expr ? &print_expr_nativeopencl_wrap
+										 : &print_expr_opencl_wrap,
 		NULL);
 
 	p = isl_printer_set_output_format(p, ISL_FORMAT_C);
-	p = opencl_print_kernel_header(p, prog, kernel, build, print_options);
+	p = opencl_print_kernel_header(p, prog, kernel, build, cl_print_options);
 	p = isl_printer_print_str(p, "{");
 	p = isl_printer_end_line(p);
 	p = isl_printer_indent(p, 4);
 	p = opencl_print_kernel_iterators(p, kernel);
 	p = opencl_print_kernel_vars(p, kernel);
 	p = isl_printer_end_line(p);
-	p = isl_ast_node_print(kernel->tree, p, print_options);
+	p = isl_ast_node_print(kernel->tree, p, cl_print_options);
 	p = isl_printer_indent(p, -4);
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "}");
@@ -1285,8 +1285,8 @@ static __isl_give isl_printer *opencl_print_host_code(__isl_take isl_printer *p,
 	print_options = isl_ast_print_options_set_print_user(print_options,
 				&opencl_print_host_user, &data);
 	print_options = isl_ast_print_options_set_print_expr(print_options,
-		opencl->options->opencl_native_expr ? &print_expr_nativec
-											: &print_expr_hostside,
+		opencl->options->opencl_native_expr ? &print_expr_nativec_wrap
+											: &print_expr_hostside_wrap,
 		NULL);
 
 	p = isl_ast_node_print(tree, p, print_options);
@@ -1393,8 +1393,8 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	build = isl_ast_build_from_context(isl_set_copy(prog->context));
 	print_options = isl_ast_print_options_alloc(prog->ctx);
 	print_options = isl_ast_print_options_set_print_expr(print_options,
-		opencl->options->opencl_native_expr ? &print_expr_nativec
-											: &print_expr_hostside,
+		opencl->options->opencl_native_expr ? &print_expr_nativec_wrap
+											: &print_expr_hostside_wrap,
 		NULL);
 
 	p = ppcg_start_block(p);
@@ -1445,8 +1445,8 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 	r = opencl_open_files(&opencl);
 	host_print_options = isl_ast_print_options_alloc(ctx);
 	host_print_options = isl_ast_print_options_set_print_expr(
-		host_print_options, options->opencl_native_expr ? &print_expr_nativec
-														: &print_expr_hostside,
+		host_print_options, options->opencl_native_expr ? &print_expr_nativec_wrap
+														: &print_expr_hostside_wrap,
 		NULL);
 
 	if (r >= 0)
