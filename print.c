@@ -178,9 +178,8 @@ __isl_give isl_printer *ppcg_print_guarded(__isl_take isl_printer *p,
 		options = isl_ast_print_options_alloc(ctx);
 	options = isl_ast_print_options_set_print_user(options,
 						&print_guarded_user, &data);
-
 	p = isl_ast_node_print(tree, p, options);
-
 	isl_ast_node_free(tree);
+
 	return p;
 }

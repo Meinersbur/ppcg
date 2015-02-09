@@ -731,7 +731,9 @@ static char *hostside_funcnames[] = {[isl_ast_op_fdiv_q] "__ppcg_floord",
 	[isl_ast_op_min] "__ppcg_min", [isl_ast_op_max] "__ppcg_max"};
 
 /* custom function names on the OpenCL side
- * min and max are OpenCL standard function; __ppcg_floord is printed in the beginning of the .cl file */
+ *
+ * min and max are OpenCL standard functions; __ppcg_floord is printed in the
+ * beginning of the .cl file */
 static char *opencl_funcnames[] = {[isl_ast_op_fdiv_q] "__ppcg_floord",
 	[isl_ast_op_min] "min", [isl_ast_op_max] "max"};
 
@@ -1455,7 +1457,6 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 
 	if (opencl_close_files(&opencl) < 0)
 		r = -1;
-
 	isl_printer_free(opencl.kprinter);
 
 	return r;
