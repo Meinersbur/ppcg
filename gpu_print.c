@@ -38,7 +38,10 @@ __isl_give isl_printer *gpu_print_macros(__isl_take isl_printer *p,
 	return p;
 }
 
-static __isl_give isl_printer *print_pw_aff(__isl_keep isl_pw_aff *pwaff, __isl_take isl_printer *p, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options) {
+static __isl_give isl_printer *print_pw_aff(__isl_keep isl_pw_aff *pwaff,
+	__isl_take isl_printer *p, __isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
+{
 	isl_ast_expr *expr;
 
 	if (!build && !print_options) {
@@ -56,7 +59,8 @@ static __isl_give isl_printer *print_pw_aff(__isl_keep isl_pw_aff *pwaff, __isl_
 /* Print an expression for the size of "array" in bytes.
  */
 __isl_give isl_printer *gpu_array_info_print_size(__isl_take isl_printer *prn,
-	struct gpu_array_info *array, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	struct gpu_array_info *array, __isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	int i;
 	isl_ast_expr *expr;
@@ -76,7 +80,9 @@ __isl_give isl_printer *gpu_array_info_print_size(__isl_take isl_printer *prn,
 /* Print the declaration of a non-linearized array argument.
  */
 static __isl_give isl_printer *print_non_linearized_declaration_argument(
-	__isl_take isl_printer *p, struct gpu_array_info *array, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	__isl_take isl_printer *p, struct gpu_array_info *array,
+	__isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	int i;
 	isl_ast_expr *expr;
@@ -100,7 +106,8 @@ static __isl_give isl_printer *print_non_linearized_declaration_argument(
  */
 __isl_give isl_printer *gpu_array_info_print_declaration_argument(
 	__isl_take isl_printer *p, struct gpu_array_info *array,
-	const char *memory_space, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	const char *memory_space, __isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	if (gpu_array_is_read_only_scalar(array)) {
 		p = isl_printer_print_str(p, array->type);
@@ -115,7 +122,8 @@ __isl_give isl_printer *gpu_array_info_print_declaration_argument(
 	}
 
 	if (array->n_index != 0 && !array->linearize)
-		return print_non_linearized_declaration_argument(p, array, build, print_options);
+		return print_non_linearized_declaration_argument(
+			p, array, build, print_options);
 
 	p = isl_printer_print_str(p, array->type);
 	p = isl_printer_print_str(p, " ");
