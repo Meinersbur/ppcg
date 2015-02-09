@@ -446,6 +446,8 @@ static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
 	tree = isl_ast_build_ast_from_schedule(build, schedule_map);
 	isl_ast_build_free(build);
 
+	if (print_options)
+		print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 							&print_user, NULL);
 	print_options = isl_ast_print_options_set_print_for(print_options,

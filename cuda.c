@@ -570,7 +570,6 @@ static __isl_give isl_printer *copy_arrays_from_device(
 {
 	int i;
 	isl_union_set *copy_out;
-
 	copy_out = isl_union_set_copy(prog->copy_out);
 
 	for (i = 0; i < prog->n_array; ++i) {
@@ -601,7 +600,6 @@ static __isl_give isl_printer *copy_arrays_from_device(
 	isl_union_set_free(copy_out);
 	p = isl_printer_start_line(p);
 	p = isl_printer_end_line(p);
-
 	return p;
 }
 

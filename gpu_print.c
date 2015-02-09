@@ -38,6 +38,8 @@ __isl_give isl_printer *gpu_print_macros(__isl_take isl_printer *p,
 	return p;
 }
 
+/* Print an isl_pw_aff using the given builder and print options
+ */
 static __isl_give isl_printer *print_pw_aff(__isl_keep isl_pw_aff *pwaff,
 	__isl_take isl_printer *p, __isl_keep isl_ast_build *build,
 	__isl_keep isl_ast_print_options *print_options)
@@ -45,7 +47,7 @@ static __isl_give isl_printer *print_pw_aff(__isl_keep isl_pw_aff *pwaff,
 	isl_ast_expr *expr;
 
 	if (!build && !print_options) {
-		// Quick path for CUDA target
+		// Quick path when using defaults (CUDA target)
 		return isl_printer_print_pw_aff(p, pwaff);
 	}
 
