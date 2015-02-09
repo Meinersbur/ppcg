@@ -5925,12 +5925,15 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	if (!gen->any_parallelism) {
 		isl_set_free(context);
 		isl_set_free(guard);
-		p = print_cpu(p, scop, options, gen, isl_ast_print_options_copy(gen->host_print_options), gen->host_print_macros);
+		p = print_cpu(p, scop, options, gen,
+			isl_ast_print_options_copy(gen->host_print_options),
+			gen->host_print_macros);
 	} else {
 		compute_copy_in_and_out(gen);
 		gen->tree = generate_host_code(gen);
 		p = ppcg_print_exposed_declarations(p, prog->scop);
-		p = ppcg_print_guarded(p, guard, context, &print_gpu, gen, isl_ast_print_options_copy(gen->host_print_options));
+		p = ppcg_print_guarded(p, guard, context, &print_gpu, gen,
+			isl_ast_print_options_copy(gen->host_print_options));
 		isl_ast_node_free(gen->tree);
 	}
 
@@ -5957,9 +5960,10 @@ static __isl_give isl_printer *generate_wrap(__isl_take isl_printer *p,
 int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	struct ppcg_options *options,
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
-		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-		struct gpu_types *types, void *user),
-		void *user, __isl_take isl_ast_print_options *print_cpu_options, int print_cpu_macros)
+					 struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
+					 struct gpu_types *types, void *user),
+	void *user, __isl_take isl_ast_print_options *print_cpu_options,
+	int print_cpu_macros)
 {
 	struct gpu_gen gen;
 	int r;

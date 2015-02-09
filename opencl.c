@@ -112,16 +112,16 @@ static int opencl_open_files(struct opencl_info *info)
 
 	if (!info->options->opencl_native_expr) {
 		info->kprinter = isl_printer_print_str(info->kprinter,
-				"\n"
-				"/** floored division (round to negative infinity),\n"
-				"    potentially called by ppcg generated code      */\n"
-				"int __ppcg_floord(int n, uint d)\n"
-				"{\n"
-				"    if (n<0)\n"
-				"        return -((-n+d-1)/d);\n"
-				"    return n/d;\n"
-				"}\n"
-				"\n");
+			"\n"
+			"/** floored division (round to negative infinity),\n"
+			"    potentially called by ppcg generated code      */\n"
+			"int __ppcg_floord(int n, uint d)\n"
+			"{\n"
+			"    if (n<0)\n"
+			"        return -((-n+d-1)/d);\n"
+			"    return n/d;\n"
+			"}\n"
+			"\n");
 	}
 
 	return 0;
@@ -277,7 +277,9 @@ static int is_array_positive_size_guard_trivial(struct gpu_array_info *array)
  * pointer to opencl_create_device_buffer if the needs_ptr flag is nonzero.
  */
 static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
-	struct gpu_array_info *array, int needs_ptr, struct opencl_info *info, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	struct gpu_array_info *array, int needs_ptr, struct opencl_info *info,
+	__isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	int need_lower_bound;
 	p = ppcg_start_block(p);
@@ -315,7 +317,8 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 	if (needs_ptr) {
 		p = isl_printer_print_str(p, "&");
 		p = isl_printer_print_str(p, array->name);
-	} else
+	}
+	else
 		p = isl_printer_print_str(p, "NULL");
 	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
@@ -328,7 +331,9 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 /* Allocate device arrays.
  */
 static __isl_give isl_printer *opencl_allocate_device_arrays(
-	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info,
+	__isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	int i;
 
@@ -473,7 +478,8 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
  */
 static __isl_give isl_printer *opencl_print_kernel_arguments(
 	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct ppcg_kernel *kernel, int types, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	struct ppcg_kernel *kernel, int types, __isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	int i, n;
 	int first = 1;
@@ -496,8 +502,8 @@ static __isl_give isl_printer *opencl_print_kernel_arguments(
 			p = isl_printer_print_str(p, ", ");
 
 		if (types)
-			p = gpu_array_info_print_declaration_argument(p,
-				&prog->array[i], "__global", build, print_options);
+			p = gpu_array_info_print_declaration_argument(
+				p, &prog->array[i], "__global", build, print_options);
 		else
 			p = gpu_array_info_print_call_argument(p,
 				&prog->array[i]);
@@ -546,7 +552,8 @@ static __isl_give isl_printer *opencl_print_kernel_arguments(
  */
 static __isl_give isl_printer *opencl_print_kernel_header(
 	__isl_take isl_printer *p, struct gpu_prog *prog,
-	struct ppcg_kernel *kernel, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	struct ppcg_kernel *kernel, __isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "__kernel void kernel");
@@ -739,10 +746,15 @@ static __isl_give isl_printer *opencl_enable_double_support(
 	return p;
 }
 
-static char *hostside_funcnames[] = { [isl_ast_op_fdiv_q] "__ppcg_floord", [isl_ast_op_min] "__ppcg_min", [isl_ast_op_max] "__ppcg_max"};
-static char *opencl_funcnames[] = { [isl_ast_op_fdiv_q] "__ppcg_floord", [isl_ast_op_min] "min", [isl_ast_op_max] "max"};
+static char *hostside_funcnames[] = {[isl_ast_op_fdiv_q] "__ppcg_floord",
+	[isl_ast_op_min] "__ppcg_min", [isl_ast_op_max] "__ppcg_max"};
+static char *opencl_funcnames[] = {[isl_ast_op_fdiv_q] "__ppcg_floord",
+	[isl_ast_op_min] "min", [isl_ast_op_max] "max"};
 
-static __isl_give isl_printer *print_expr(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, char *funcnames[]) {
+static __isl_give isl_printer *print_expr(__isl_take isl_printer *p,
+	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
+	char *funcnames[])
+{
 	int nargs, i;
 	isl_ast_expr *arg;
 	enum isl_ast_expr_type exprtype = isl_ast_expr_get_type(expr);
@@ -750,38 +762,43 @@ static __isl_give isl_printer *print_expr(__isl_take isl_printer *p, __isl_take 
 	if (exprtype == isl_ast_expr_op) {
 		enum isl_ast_op_type optype = isl_ast_expr_get_op_type(expr);
 		switch (optype) {
-		case isl_ast_op_fdiv_q:
-		case isl_ast_op_min:
-		case isl_ast_op_max:
-			nargs = isl_ast_expr_get_op_n_arg(expr);
+			case isl_ast_op_fdiv_q:
+			case isl_ast_op_min:
+			case isl_ast_op_max:
+				nargs = isl_ast_expr_get_op_n_arg(expr);
 
-			for (i = 1; i < nargs; ++i) {
-				p = isl_printer_print_str(p, funcnames[optype]);
-				p = isl_printer_print_str(p, "(");
-			}
-			arg = isl_ast_expr_get_op_arg(expr, 0);
-			p = isl_ast_expr_print(arg, p, isl_ast_print_options_copy(options));
-			isl_ast_expr_free(arg);
-			for (i = 1; i < nargs; ++i) {
-				p = isl_printer_print_str(p, ", ");
-				arg = isl_ast_expr_get_op_arg(expr, i);
-				p = isl_ast_expr_print(arg, p, isl_ast_print_options_copy(options));
+				for (i = 1; i < nargs; ++i) {
+					p = isl_printer_print_str(p, funcnames[optype]);
+					p = isl_printer_print_str(p, "(");
+				}
+				arg = isl_ast_expr_get_op_arg(expr, 0);
+				p = isl_ast_expr_print(
+					arg, p, isl_ast_print_options_copy(options));
 				isl_ast_expr_free(arg);
-				p = isl_printer_print_str(p, ")");
-			}
-			isl_ast_print_options_free(options);
-			return p;
+				for (i = 1; i < nargs; ++i) {
+					p = isl_printer_print_str(p, ", ");
+					arg = isl_ast_expr_get_op_arg(expr, i);
+					p = isl_ast_expr_print(
+						arg, p, isl_ast_print_options_copy(options));
+					isl_ast_expr_free(arg);
+					p = isl_printer_print_str(p, ")");
+				}
+				isl_ast_print_options_free(options);
+				return p;
 		}
 	}
 	return isl_ast_expr_print_c(p, expr, options);
 }
 
-static __isl_give isl_printer * print_expr_native_minmax(__isl_take isl_printer *p, __isl_keep isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, int from, int to) {
+static __isl_give isl_printer *print_expr_native_minmax(
+	__isl_take isl_printer *p, __isl_keep isl_ast_print_options *options,
+	__isl_keep isl_ast_expr *expr, int from, int to)
+{
 	isl_ast_expr *arg;
 	enum isl_ast_op_type optype;
 	int mid;
 
-	if (from==to) {
+	if (from == to) {
 		arg = isl_ast_expr_get_op_arg(expr, from);
 
 		p = isl_printer_print_str(p, "(");
@@ -792,22 +809,25 @@ static __isl_give isl_printer * print_expr_native_minmax(__isl_take isl_printer 
 		return p;
 	}
 
-	mid = (from+to)/2;
+	mid = (from + to) / 2;
 	optype = isl_ast_expr_get_op_type(expr);
 
 	p = isl_printer_print_str(p, "(");
 	p = print_expr_native_minmax(p, options, expr, from, mid);
-	p = isl_printer_print_str(p, (optype==isl_ast_op_min) ? " < " : " > ");
-	p = print_expr_native_minmax(p, options, expr, mid+1, to);
+	p = isl_printer_print_str(p, (optype == isl_ast_op_min) ? " < " : " > ");
+	p = print_expr_native_minmax(p, options, expr, mid + 1, to);
 	p = isl_printer_print_str(p, " ? ");
 	p = print_expr_native_minmax(p, options, expr, from, mid);
 	p = isl_printer_print_str(p, " : ");
-	p = print_expr_native_minmax(p, options, expr, mid+1, to);
+	p = print_expr_native_minmax(p, options, expr, mid + 1, to);
 	p = isl_printer_print_str(p, ")");
 	return p;
 }
 
-static __isl_give isl_printer *print_expr_native(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, int isopencl) {
+static __isl_give isl_printer *print_expr_native(__isl_take isl_printer *p,
+	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
+	int isopencl)
+{
 	int nargs, i;
 	isl_ast_expr *arg, *argn, *argd;
 	enum isl_ast_expr_type exprtype = isl_ast_expr_get_type(expr);
@@ -815,74 +835,97 @@ static __isl_give isl_printer *print_expr_native(__isl_take isl_printer *p, __is
 	if (exprtype == isl_ast_expr_op) {
 		enum isl_ast_op_type optype = isl_ast_expr_get_op_type(expr);
 		switch (optype) {
-		case isl_ast_op_fdiv_q:
-			argn = isl_ast_expr_get_op_arg(expr, 0);
-			argd = isl_ast_expr_get_op_arg(expr, 1);
+			case isl_ast_op_fdiv_q:
+				argn = isl_ast_expr_get_op_arg(expr, 0);
+				argd = isl_ast_expr_get_op_arg(expr, 1);
 
-			p = isl_printer_print_str(p, "((");
-			p = isl_ast_expr_print(argn, p, isl_ast_print_options_copy(options));
-			p = isl_printer_print_str(p, ") < 0 ? -(((");
-			p = isl_ast_expr_print(argd, p, isl_ast_print_options_copy(options));
-			p = isl_printer_print_str(p, ")-(");
-			p = isl_ast_expr_print(argn, p, isl_ast_print_options_copy(options));
-			p = isl_printer_print_str(p, ")-1)/(");
-			p = isl_ast_expr_print(argd, p, isl_ast_print_options_copy(options));
-			p = isl_printer_print_str(p, ")) : ((");
-			p = isl_ast_expr_print(argd, p, isl_ast_print_options_copy(options));
-			p = isl_printer_print_str(p, ")/(");
-			p = isl_ast_expr_print(argn, p, isl_ast_print_options_copy(options));
-			p = isl_printer_print_str(p, ")))");
+				p = isl_printer_print_str(p, "((");
+				p = isl_ast_expr_print(
+					argn, p, isl_ast_print_options_copy(options));
+				p = isl_printer_print_str(p, ") < 0 ? -(((");
+				p = isl_ast_expr_print(
+					argd, p, isl_ast_print_options_copy(options));
+				p = isl_printer_print_str(p, ")-(");
+				p = isl_ast_expr_print(
+					argn, p, isl_ast_print_options_copy(options));
+				p = isl_printer_print_str(p, ")-1)/(");
+				p = isl_ast_expr_print(
+					argd, p, isl_ast_print_options_copy(options));
+				p = isl_printer_print_str(p, ")) : ((");
+				p = isl_ast_expr_print(
+					argd, p, isl_ast_print_options_copy(options));
+				p = isl_printer_print_str(p, ")/(");
+				p = isl_ast_expr_print(
+					argn, p, isl_ast_print_options_copy(options));
+				p = isl_printer_print_str(p, ")))");
 
-			isl_ast_expr_free(argn);
-			isl_ast_expr_free(argd);
-			isl_ast_print_options_free(options);
-			return p;
-
-		case isl_ast_op_min:
-		case isl_ast_op_max:
-			if (isopencl) {
-				// min and max are internal OpenCL functions
-				p = print_expr(p, options, expr, opencl_funcnames);
-			} else {
-				nargs = isl_ast_expr_get_op_n_arg(expr);
-				p = print_expr_native_minmax(p, options, expr, 0, nargs-1);
+				isl_ast_expr_free(argn);
+				isl_ast_expr_free(argd);
 				isl_ast_print_options_free(options);
-			}
-			return p;
+				return p;
+
+			case isl_ast_op_min:
+			case isl_ast_op_max:
+				if (isopencl) {
+					// min and max are internal OpenCL functions
+					p = print_expr(p, options, expr, opencl_funcnames);
+				}
+				else {
+					nargs = isl_ast_expr_get_op_n_arg(expr);
+					p = print_expr_native_minmax(
+						p, options, expr, 0, nargs - 1);
+					isl_ast_print_options_free(options);
+				}
+				return p;
 		}
 	}
 	return isl_ast_expr_print_c(p, expr, options);
 }
 
-
-static __isl_give isl_printer *print_expr_hostside(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user) {
+static __isl_give isl_printer *print_expr_hostside(__isl_take isl_printer *p,
+	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
+	void *user)
+{
 	return print_expr(p, options, expr, hostside_funcnames);
 }
 
-
-static __isl_give isl_printer *print_expr_opencl(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,  void *user) {
+static __isl_give isl_printer *print_expr_opencl(__isl_take isl_printer *p,
+	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
+	void *user)
+{
 	return print_expr(p, options, expr, opencl_funcnames);
 }
 
-static __isl_give isl_printer *print_expr_nativec(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user) {
+static __isl_give isl_printer *print_expr_nativec(__isl_take isl_printer *p,
+	__isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr,
+	void *user)
+{
 	return print_expr_native(p, options, expr, 0);
 }
 
-static __isl_give isl_printer *print_expr_nativeopencl(__isl_take isl_printer *p, __isl_take isl_ast_print_options *options, __isl_keep isl_ast_expr *expr, void *user) {
+static __isl_give isl_printer *print_expr_nativeopencl(
+	__isl_take isl_printer *p, __isl_take isl_ast_print_options *options,
+	__isl_keep isl_ast_expr *expr, void *user)
+{
 	return print_expr_native(p, options, expr, 1);
 }
 
 static __isl_give isl_printer *opencl_print_kernel(struct gpu_prog *prog,
-	struct ppcg_kernel *kernel, __isl_take isl_printer *p, struct ppcg_options *ppcg_options, __isl_keep isl_ast_build *build)
+	struct ppcg_kernel *kernel, __isl_take isl_printer *p,
+	struct ppcg_options *ppcg_options, __isl_keep isl_ast_build *build)
 {
 	isl_ctx *ctx = isl_ast_node_get_ctx(kernel->tree);
 	isl_ast_print_options *print_options;
 
-	// This is the .cl file, we have another OpenCL-compatible set of print options
+	// This is the .cl file, we have another OpenCL-compatible set of print
+	// options
 	print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 				&opencl_print_kernel_stmt, NULL);
-	print_options = isl_ast_print_options_set_print_expr(print_options, ppcg_options->opencl_native_expr ? &print_expr_nativeopencl : &print_expr_opencl, NULL);
+	print_options = isl_ast_print_options_set_print_expr(print_options,
+		ppcg_options->opencl_native_expr ? &print_expr_nativeopencl
+										 : &print_expr_opencl,
+		NULL);
 
 	p = isl_printer_set_output_format(p, ISL_FORMAT_C);
 	p = opencl_print_kernel_header(p, prog, kernel, build, print_options);
@@ -921,7 +964,8 @@ struct print_host_user_data_opencl {
  * If (i > dim1) then the output is grid_sizes[i]
  */
 static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
-	__isl_take isl_printer *p, struct ppcg_kernel *kernel, int i, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options)
+	__isl_take isl_printer *p, struct ppcg_kernel *kernel, int i,
+	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options)
 {
 	int grid_dim, block_dim;
 	isl_pw_aff *bound_grid;
@@ -933,7 +977,8 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
 		bound_grid = isl_multi_pw_aff_get_pw_aff(kernel->grid_size, i);
 		p = isl_printer_print_str(p, "(");
 
-		isl_ast_expr *expr = isl_ast_build_expr_from_pw_aff(build, isl_pw_aff_copy(bound_grid));
+		isl_ast_expr *expr =
+			isl_ast_build_expr_from_pw_aff(build, isl_pw_aff_copy(bound_grid));
 		p = isl_ast_expr_print(expr, p, isl_ast_print_options_copy(options));
 		isl_ast_expr_free(expr);
 
@@ -970,7 +1015,8 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
  * this function, the user should multiply the elements of the list.
  */
 static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
-	__isl_take isl_printer *p, struct ppcg_kernel *kernel, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options)
+	__isl_take isl_printer *p, struct ppcg_kernel *kernel,
+	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options)
 {
 	int i;
 	int grid_dim, block_dim;
@@ -987,8 +1033,8 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
 		if (i > 0)
 			p = isl_printer_print_str(p, ", ");
 
-		p = opencl_print_total_number_of_work_items_for_dim(p,
-			kernel, i, build, options);
+		p = opencl_print_total_number_of_work_items_for_dim(
+			p, kernel, i, build, options);
 	}
 
 	return p;
@@ -998,7 +1044,9 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
  * back from the device to the host (to_host = 1).
  */
 static __isl_give isl_printer *pencil_runtime_copy_array(
-	__isl_take isl_printer *p, struct gpu_array_info *array, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options, int to_host)
+	__isl_take isl_printer *p, struct gpu_array_info *array,
+	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options,
+	int to_host)
 {
 	p = isl_printer_start_line(p);
 	if (to_host)
@@ -1033,7 +1081,8 @@ static __isl_give isl_printer *copy_array_to_device(__isl_take isl_printer *p,
 {
 	struct copy_array_data_opencl *data = user;
 
-	return pencil_runtime_copy_array(p, data->array, data->build, data->print_options, 0);
+	return pencil_runtime_copy_array(
+		p, data->array, data->build, data->print_options, 0);
 }
 
 /* Copy "array" back from the device to the host.
@@ -1043,7 +1092,8 @@ static __isl_give isl_printer *copy_array_from_device(__isl_take isl_printer *p,
 {
 	struct copy_array_data_opencl *data = user;
 
-	return pencil_runtime_copy_array(p, data->array, data->build, data->print_options, 1);
+	return pencil_runtime_copy_array(
+		p, data->array, data->build, data->print_options, 1);
 }
 
 /* Copy the "copy" arrays from the host to the device (to_host = 0) or
@@ -1053,13 +1103,15 @@ static __isl_give isl_printer *copy_array_from_device(__isl_take isl_printer *p,
  */
 static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
 	struct gpu_prog *prog, __isl_keep isl_union_set *copy, int to_host,
-	struct opencl_info *info, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	struct opencl_info *info, __isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
 	int i;
 
 	for (i = 0; i < prog->n_array; ++i) {
 		struct gpu_array_info *array = &prog->array[i];
-		struct copy_array_data_opencl copy_data = {info, array, build, print_options };
+		struct copy_array_data_opencl copy_data = {
+			info, array, build, print_options};
 		isl_space *space;
 		isl_set *copy_i;
 		isl_set *guard;
@@ -1089,17 +1141,23 @@ static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
 /* Copy the prog->copy_in arrays from the host to the device.
  */
 static __isl_give isl_printer *opencl_copy_arrays_to_device(
-	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info,
+	__isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
-	return opencl_copy_arrays(p, prog, prog->copy_in, 0, info, build, print_options);
+	return opencl_copy_arrays(
+		p, prog, prog->copy_in, 0, info, build, print_options);
 }
 
 /* Copy the prog->copy_out arrays back from the device to the host.
  */
 static __isl_give isl_printer *opencl_copy_arrays_from_device(
-	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info, __isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info,
+	__isl_keep isl_ast_build *build,
+	__isl_keep isl_ast_print_options *print_options)
 {
-	return opencl_copy_arrays(p, prog, prog->copy_out, 1, info, build, print_options);
+	return opencl_copy_arrays(
+		p, prog, prog->copy_out, 1, info, build, print_options);
 }
 
 /* Print the user statement of the host code to "p".
@@ -1155,7 +1213,8 @@ static __isl_give isl_printer *opencl_print_host_user(
 		p = isl_printer_print_int(p, 1);
 
 	p = isl_printer_print_str(p, "] = {");
-	p = opencl_print_total_number_of_work_items_as_list(p, kernel, build, print_options);
+	p = opencl_print_total_number_of_work_items_as_list(
+		p, kernel, build, print_options);
 	p = isl_printer_print_str(p, "};");
 	p = isl_printer_end_line(p);
 
@@ -1208,7 +1267,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_end_line(p);
 
 	data->opencl->kprinter = opencl_print_kernel(data->prog, kernel,
-						data->opencl->kprinter, data->opencl->options, build);
+		data->opencl->kprinter, data->opencl->options, build);
 
 	isl_ast_build_free(build);
 	isl_ast_print_options_free(print_options);
@@ -1216,9 +1275,9 @@ static __isl_give isl_printer *opencl_print_host_user(
 	return p;
 }
 
-static __isl_give isl_printer *opencl_print_host_code(
-	__isl_take isl_printer *p, struct gpu_prog *prog,
-	__isl_keep isl_ast_node *tree, struct opencl_info *opencl, __isl_take isl_ast_print_options *print_options)
+static __isl_give isl_printer *opencl_print_host_code(__isl_take isl_printer *p,
+	struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
+	struct opencl_info *opencl, __isl_take isl_ast_print_options *print_options)
 {
 	isl_ctx *ctx = isl_ast_node_get_ctx(tree);
 	struct print_host_user_data_opencl data = { opencl, prog };
@@ -1226,7 +1285,9 @@ static __isl_give isl_printer *opencl_print_host_code(
 	print_options = isl_ast_print_options_set_print_user(print_options,
 				&opencl_print_host_user, &data);
 	print_options = isl_ast_print_options_set_print_expr(print_options,
-			opencl->options->opencl_native_expr ? &print_expr_nativec : &print_expr_hostside, NULL);
+		opencl->options->opencl_native_expr ? &print_expr_nativec
+											: &print_expr_hostside,
+		NULL);
 
 	p = isl_ast_node_print(tree, p, print_options);
 
@@ -1332,7 +1393,9 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	build = isl_ast_build_from_context(isl_set_copy(prog->context));
 	print_options = isl_ast_print_options_alloc(prog->ctx);
 	print_options = isl_ast_print_options_set_print_expr(print_options,
-			opencl->options->opencl_native_expr ? &print_expr_nativec : &print_expr_hostside, NULL);
+		opencl->options->opencl_native_expr ? &print_expr_nativec
+											: &print_expr_hostside,
+		NULL);
 
 	p = ppcg_start_block(p);
 
@@ -1343,7 +1406,8 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	p = opencl_allocate_device_arrays(p, prog, opencl, build, print_options);
 	p = opencl_copy_arrays_to_device(p, prog, opencl, build, print_options);
 
-	p = opencl_print_host_code(p, prog, tree, opencl, isl_ast_print_options_copy(print_options));
+	p = opencl_print_host_code(
+		p, prog, tree, opencl, isl_ast_print_options_copy(print_options));
 
 	p = opencl_copy_arrays_from_device(p, prog, opencl, build, print_options);
 	p = opencl_release_device_arrays(p, prog, opencl);
@@ -1380,11 +1444,14 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 	opencl.kprinter = isl_printer_to_str(ctx);
 	r = opencl_open_files(&opencl);
 	host_print_options = isl_ast_print_options_alloc(ctx);
-	host_print_options = isl_ast_print_options_set_print_expr(host_print_options, options->opencl_native_expr ? &print_expr_nativec : &print_expr_hostside, NULL);
+	host_print_options = isl_ast_print_options_set_print_expr(
+		host_print_options, options->opencl_native_expr ? &print_expr_nativec
+														: &print_expr_hostside,
+		NULL);
 
 	if (r >= 0)
-		r = generate_gpu(ctx, input, opencl.host_c, options,
-				&print_opencl, &opencl, host_print_options, 0);
+		r = generate_gpu(ctx, input, opencl.host_c, options, &print_opencl,
+			&opencl, host_print_options, 0);
 
 	if (opencl_close_files(&opencl) < 0)
 		r = -1;

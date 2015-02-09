@@ -237,8 +237,8 @@ static __isl_give isl_printer *print_kernel_arguments(__isl_take isl_printer *p,
 			p = isl_printer_print_str(p, ", ");
 
 		if (types)
-			p = gpu_array_info_print_declaration_argument(p,
-				&prog->array[i], NULL, NULL, NULL);
+			p = gpu_array_info_print_declaration_argument(
+				p, &prog->array[i], NULL, NULL, NULL);
 		else
 			p = gpu_array_info_print_call_argument(p,
 				&prog->array[i]);
@@ -679,7 +679,8 @@ int generate_cuda(isl_ctx *ctx, struct ppcg_options *options,
 
 	cuda_open_files(&cuda, input);
 
-	r = generate_gpu(ctx, input, cuda.host_c, options, &print_cuda, &cuda, NULL, 1);
+	r = generate_gpu(
+		ctx, input, cuda.host_c, options, &print_cuda, &cuda, NULL, 1);
 
 	cuda_close_files(&cuda);
 

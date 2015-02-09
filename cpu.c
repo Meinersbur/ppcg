@@ -412,7 +412,8 @@ error:
 /* Code generate the scop 'scop' and print the corresponding C code to 'p'.
  */
 static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
-	__isl_take isl_printer *p, struct ppcg_options *options, void *user, __isl_take isl_ast_print_options *print_options, int print_macros)
+	__isl_take isl_printer *p, struct ppcg_options *options, void *user,
+	__isl_take isl_ast_print_options *print_options, int print_macros)
 {
 	isl_ctx *ctx = isl_printer_get_ctx(p);
 	isl_set *context;
@@ -481,7 +482,8 @@ static int any_hidden_declarations(struct ppcg_scop *scop)
  * to "p", including variable declarations.
  */
 __isl_give isl_printer *print_cpu(__isl_take isl_printer *p,
-	struct ppcg_scop *ps, struct ppcg_options *options, void *user, __isl_take isl_ast_print_options *print_options, int print_macros)
+	struct ppcg_scop *ps, struct ppcg_options *options, void *user,
+	__isl_take isl_ast_print_options *print_options, int print_macros)
 {
 	int hidden;
 
@@ -511,7 +513,8 @@ static __isl_give isl_printer *print_cpu_wrap(__isl_take isl_printer *p,
 	struct ppcg_scop *scop, void *user)
 {
 	struct ppcg_options *options = user;
-	isl_ast_print_options *print_options = isl_ast_print_options_alloc(isl_printer_get_ctx(p));
+	isl_ast_print_options *print_options =
+		isl_ast_print_options_alloc(isl_printer_get_ctx(p));
 
 	return print_cpu(p, scop, options, NULL, print_options, 1);
 }

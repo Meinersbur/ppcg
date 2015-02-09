@@ -54,7 +54,7 @@ struct ppcg_options {
 	/* Embed OpenCL kernel code in host code. */
 	int opencl_embed_kernel_code;
 
-	/* Generate native expressions only 
+	/* Generate native expressions only
 	 * (no __ppcg_floord, __ppcg_min or __ppcg_max) */
 	int opencl_native_expr;
 };
