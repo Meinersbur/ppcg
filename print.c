@@ -174,6 +174,8 @@ __isl_give isl_printer *ppcg_print_guarded(__isl_take isl_printer *p,
 	tree = isl_ast_build_ast_from_schedule(build, schedule);
 	isl_ast_build_free(build);
 
+	if (!options)
+		options = isl_ast_print_options_alloc(ctx);
 	options = isl_ast_print_options_set_print_user(options,
 						&print_guarded_user, &data);
 
