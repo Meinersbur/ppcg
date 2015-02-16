@@ -267,7 +267,6 @@ static __isl_give isl_printer *print_kernel_arguments(__isl_take isl_printer *p,
 	type = isl_options_get_ast_iterator_type(prog->ctx);
 	for (i = 0; i < n; ++i) {
 		const char *name;
-		isl_id *id;
 
 		if (!first)
 			p = isl_printer_print_str(p, ", ");
@@ -326,9 +325,36 @@ static void print_indent(FILE *dst, int indent)
 	fprintf(dst, "%*s", indent, "");
 }
 
+/* Print a list of iterators of type "type" with names "ids" to "out".
+ * Each iterator is assigned one of the cuda identifiers in cuda_dims.
+ * In particular, the last iterator is assigned the x identifier
+ * (the first in the list of cuda identifiers).
+ */
+static void print_iterators(FILE *out, const char *type,
+	__isl_keep isl_id_list *ids, const char *cuda_dims[])
+{
+	int i, n;
+
+	n = isl_id_list_n_id(ids);
+	if (n <= 0)
+		return;
+	print_indent(out, 4);
+	fprintf(out, "%s ", type);
+	for (i = 0; i < n; ++i) {
+		isl_id *id;
+
+		if (i)
+			fprintf(out, ", ");
+		id = isl_id_list_get_id(ids, i);
+		fprintf(out, "%s%d = %s", isl_id_get_name(id), i,
+			cuda_dims[n - 1 - i]);
+		isl_id_free(id);
+	}
+	fprintf(out, ";\n");
+}
+
 static void print_kernel_iterators(FILE *out, struct ppcg_kernel *kernel)
 {
-	int i, n_grid;
 	isl_ctx *ctx = isl_ast_node_get_ctx(kernel->tree);
 	const char *type;
 	const char *block_dims[] = { "blockIdx.x", "blockIdx.y" };
@@ -337,30 +363,8 @@ static void print_kernel_iterators(FILE *out, struct ppcg_kernel *kernel)
 
 	type = isl_options_get_ast_iterator_type(ctx);
 
-	n_grid = isl_multi_pw_aff_dim(kernel->grid_size, isl_dim_set);
-	if (n_grid > 0) {
-		print_indent(out, 4);
-		fprintf(out, "%s ", type);
-		for (i = 0; i < n_grid; ++i) {
-			if (i)
-				fprintf(out, ", ");
-			fprintf(out, "b%d = %s",
-				i, block_dims[n_grid - 1 - i]);
-		}
-		fprintf(out, ";\n");
-	}
-
-	if (kernel->n_block > 0) {
-		print_indent(out, 4);
-		fprintf(out, "%s ", type);
-		for (i = 0; i < kernel->n_block; ++i) {
-			if (i)
-				fprintf(out, ", ");
-			fprintf(out, "t%d = %s",
-				i, thread_dims[kernel->n_block - 1 - i]);
-		}
-		fprintf(out, ";\n");
-	}
+	print_iterators(out, type, kernel->block_ids, block_dims);
+	print_iterators(out, type, kernel->thread_ids, thread_dims);
 }
 
 static __isl_give isl_printer *print_kernel_var(__isl_take isl_printer *p,
