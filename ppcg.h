@@ -4,6 +4,7 @@
 #include <isl/set.h>
 #include <isl/union_set.h>
 #include <isl/union_map.h>
+#include <isl/id_to_ast_expr.h>
 #include <pet.h>
 
 #include "ppcg_options.h"
@@ -58,6 +59,9 @@ int ppcg_extract_base_name(char *name, const char *input);
  *	set of anti and output dependences.
  * "schedule" represents the (original) schedule.
  *
+ * "names" contains all variable names that are in use by the scop.
+ * The names are mapped to a dummy value.
+ *
  * "pet" is the original pet_scop.
  */
 struct ppcg_scop {
@@ -91,8 +95,13 @@ struct ppcg_scop {
 	isl_union_map *tagged_dep_order;
 	isl_union_map *schedule;
 
+	isl_id_to_ast_expr *names;
+
 	struct pet_scop *pet;
 };
+
+__isl_give isl_id_list *ppcg_scop_generate_names(struct ppcg_scop *scop,
+	int n, const char *prefix);
 
 int ppcg_transform(isl_ctx *ctx, const char *input, FILE *out,
 	struct ppcg_options *options,
