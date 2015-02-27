@@ -19,8 +19,8 @@
 #include <isl/aff.h>
 #include <isl/ilp.h>
 #include <isl/flow.h>
-#include <isl/band.h>
 #include <isl/schedule.h>
+#include <isl/schedule_node.h>
 #include <isl/options.h>
 #include <isl/ast_build.h>
 
@@ -324,32 +324,11 @@ static void *free_tile(struct gpu_array_tile *tile)
 	return NULL;
 }
 
-static struct pet_array *find_array(struct ppcg_scop *scop,
-	__isl_keep isl_set *accessed)
-{
-	int i;
-	isl_id *id;
-
-	id = isl_set_get_tuple_id(accessed);
-
-	for (i = 0; i < scop->pet->n_array; ++i) {
-		isl_id *id_i;
-
-		id_i = isl_set_get_tuple_id(scop->pet->arrays[i]->extent);
-		isl_id_free(id_i);
-		if (id == id_i)
-			break;
-	}
-	isl_id_free(id);
-
-	return i < scop->pet->n_array ? scop->pet->arrays[i] : NULL;
-}
-
 /* Compute and return the extent of "array", taking into account the set of
  * accessed elements.
  *
  * In particular, the extent in the outer dimension is taken
- * from "accessed", while then extent in the remaing dimensions
+ * from "accessed", while the extents in the remaining dimensions
  * are taken from array->extent.
  *
  * The extent in the outer dimension cannot be taken from array->extent
@@ -407,43 +386,36 @@ static int is_read_only_scalar(struct gpu_array_info *array,
 	return empty;
 }
 
-/* Compute bounds on the host arrays based on the accessed elements
+/* Compute bounds on the host array "pa" based on the corresponding
+ * accessed elements in "arrays"
  * and collect all references to the array.
+ * Store the results in "info".
  *
  * If the array is zero-dimensional and does not contain structures,
  * i.e., if the array is a scalar, we check whether it is read-only.
+ * We also check whether the array is accessed at all.
  */
-static int extract_array_info(__isl_take isl_set *array, void *user)
+static int extract_array_info(struct gpu_prog *prog,
+	struct gpu_array_info *info, struct pet_array *pa,
+	__isl_keep isl_union_set *arrays)
 {
-	int i;
-	struct gpu_prog *prog = (struct gpu_prog *)user;
+	int i, empty;
 	const char *name;
 	int n_index;
 	isl_pw_aff **bounds;
-	struct pet_array *pa;
-	struct gpu_array_info *info;
-	isl_set *extent;
+	isl_set *accessed, *extent;
 
-	info = &prog->array[prog->n_array];
-	prog->n_array++;
-
-	n_index = isl_set_dim(array, isl_dim_set);
-	name = isl_set_get_tuple_name(array);
-	bounds = isl_alloc_array(isl_set_get_ctx(array),
-				 isl_pw_aff *, n_index);
+	n_index = isl_set_dim(pa->extent, isl_dim_set);
+	name = isl_set_get_tuple_name(pa->extent);
+	bounds = isl_alloc_array(prog->ctx, isl_pw_aff *, n_index);
 	if (!bounds)
-		goto error;
+		return -1;
 
-	info->space = isl_set_get_space(array);
+	info->space = isl_set_get_space(pa->extent);
 	info->name = strdup(name);
 	info->n_index = n_index;
 	info->bound = bounds;
 	info->linearize = prog->scop->options->linearize_device_arrays;
-
-	pa = find_array(prog->scop, array);
-	if (!pa)
-		isl_die(isl_set_get_ctx(array), isl_error_internal,
-			"unable to find array in scop", goto error);
 
 	info->type = strdup(pa->element_type);
 	info->size = pa->element_size;
@@ -451,8 +423,15 @@ static int extract_array_info(__isl_take isl_set *array, void *user)
 	info->has_compound_element = pa->element_is_record;
 	info->read_only_scalar = is_read_only_scalar(info, prog);
 
-	extent = compute_extent(pa, array);
+	accessed = isl_union_set_extract_set(arrays,
+					    isl_space_copy(info->space));
+	empty = isl_set_is_empty(accessed);
+	extent = compute_extent(pa, accessed);
+	isl_set_free(accessed);
 	info->extent = extent;
+	if (empty < 0)
+		return -1;
+	info->accessed = !empty;
 	for (i = 0; i < n_index; ++i) {
 		isl_set *dom;
 		isl_local_space *ls;
@@ -483,11 +462,7 @@ static int extract_array_info(__isl_take isl_set *array, void *user)
 
 	collect_references(prog, info);
 
-	isl_set_free(array);
 	return 0;
-error:
-	isl_set_free(array);
-	return -1;
 }
 
 /* Remove independence from the order constraints "order" on array "array".
@@ -578,9 +553,11 @@ void collect_order_dependences(struct gpu_prog *prog)
 	isl_union_map_free(accesses);
 }
 
-/* Construct a gpu_array_info for each array possibly accessed by "prog" and
+/* Construct a gpu_array_info for each array referenced by prog->scop and
  * collect them in prog->array.
  *
+ * The sizes are based on the extents and the set of possibly accessed
+ * elements by "prog".
  * If there are any member accesses involved, then they are first mapped
  * to the outer arrays of structs.
  *
@@ -589,7 +566,8 @@ void collect_order_dependences(struct gpu_prog *prog)
  */
 static int collect_array_info(struct gpu_prog *prog)
 {
-	int r;
+	int i;
+	int r = 0;
 	isl_union_set *arrays;
 
 	arrays = isl_union_map_range(isl_union_map_copy(prog->read));
@@ -601,12 +579,15 @@ static int collect_array_info(struct gpu_prog *prog)
 
 	arrays = isl_union_set_coalesce(arrays);
 
-	prog->n_array = isl_union_set_n_set(arrays);
+	prog->n_array = prog->scop->pet->n_array;
 	prog->array = isl_calloc_array(prog->ctx,
 				     struct gpu_array_info, prog->n_array);
 	assert(prog->array);
-	prog->n_array = 0;
-	r = isl_union_set_foreach_set(arrays, &extract_array_info, prog);
+	for (i = 0; i < prog->scop->pet->n_array; ++i)
+		if (extract_array_info(prog, &prog->array[i],
+					prog->scop->pet->arrays[i], arrays) < 0)
+			r = -1;
+
 	isl_union_set_free(arrays);
 
 	if (prog->scop->options->live_range_reordering)
@@ -1312,10 +1293,6 @@ __isl_give isl_set *add_bounded_parameters(__isl_take isl_set *set,
 {
 	int i, len;
 	unsigned nparam;
-	isl_space *dim;
-	isl_basic_set *bset;
-	isl_constraint *c;
-	isl_local_space *ls;
 
 	len = isl_id_list_n_id(ids);
 	nparam = isl_set_dim(set, isl_dim_param);
@@ -1326,28 +1303,12 @@ __isl_give isl_set *add_bounded_parameters(__isl_take isl_set *set,
 
 		id = isl_id_list_get_id(ids, i);
 		set = isl_set_set_dim_id(set, isl_dim_param, nparam + i, id);
+		set = isl_set_lower_bound_si(set, isl_dim_param, nparam + i, 0);
+		set = isl_set_upper_bound_si(set, isl_dim_param,
+					    nparam + i, size[i] - 1);
 	}
 
-	dim = isl_set_get_space(set);
-	bset = isl_basic_set_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < len; ++i) {
-		c = isl_inequality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_param,
-							nparam + i, 1);
-		bset = isl_basic_set_add_constraint(bset, c);
-	
-		c = isl_inequality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_param,
-							nparam + i, -1);
-		c = isl_constraint_set_constant_si(c, size[i] - 1);
-		bset = isl_basic_set_add_constraint(bset, c);
-	}
-
-	isl_local_space_free(ls);
-
-	return isl_set_intersect(set, isl_set_from_basic_set(bset));
+	return set;
 }
 
 /* Add "len" parameters p[i] with identifiers "ids" and intersect "set"
@@ -3989,6 +3950,10 @@ __isl_give isl_ast_expr *gpu_local_array_info_linearize_index(
 
 /* AST expression transformation callback for pet_stmt_build_ast_exprs.
  *
+ * If the AST expression refers to an array that is not accessed
+ * at all, then this means the value of the expression is not used,
+ * so we might as well print zero (NULL pointer) instead.
+ *
  * If the AST expression refers to a global scalar that is not
  * a read-only scalar, then its address was passed to the kernel and
  * we need to dereference it.
@@ -4003,6 +3968,13 @@ static __isl_give isl_ast_expr *transform_expr(__isl_take isl_ast_expr *expr,
 
 	if (!data->array)
 		return expr;
+	if (!data->array->accessed) {
+		isl_ctx *ctx;
+
+		ctx = isl_ast_expr_get_ctx(expr);
+		isl_ast_expr_free(expr);
+		return isl_ast_expr_from_val(isl_val_zero(ctx));
+	}
 	if (gpu_array_is_read_only_scalar(data->array))
 		return expr;
 	if (!data->global)
@@ -4763,7 +4735,7 @@ static __isl_give isl_union_map *remove_local_accesses(struct gpu_gen *gen,
 	int read)
 {
 	int empty;
-	isl_union_map *tagger;
+	isl_union_pw_multi_aff *tagger;
 	isl_union_set *domain;
 	isl_space *space;
 	isl_union_map *sched, *local, *tagged, *external;
@@ -4781,10 +4753,10 @@ static __isl_give isl_union_map *remove_local_accesses(struct gpu_gen *gen,
 	proj = projection(space, gen->untiled_len, group->last_shared + 1);
 	sched = isl_union_map_apply_range(sched, isl_union_map_from_map(proj));
 
-	tagger = isl_union_map_copy(gen->prog->scop->tagger);
+	tagger = isl_union_pw_multi_aff_copy(gen->prog->scop->tagger);
 	domain = isl_union_map_domain(isl_union_map_copy(tagged));
-	tagger = isl_union_map_intersect_range(tagger, domain);
-	sched = isl_union_map_apply_domain(sched, tagger);
+	tagger = isl_union_pw_multi_aff_intersect_domain(tagger, domain);
+	sched = isl_union_map_preimage_domain_union_pw_multi_aff(sched, tagger);
 
 	local = isl_union_map_apply_range(sched,
 			    isl_union_map_reverse(isl_union_map_copy(sched)));
@@ -5304,52 +5276,40 @@ static int set_stmt_tile_len(__isl_take isl_map *map, void *user)
 	return 0;
 }
 
-static void list_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_band_list *list, int pos, struct band_info *list_info);
+static void select_outer_band(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node, int pos, struct band_info *info);
 
-/* Check if this band has any parallel loops.  If so, take it as
- * the outermost tilable band.  If not, continue looking for the
+/* Check if this band node is tilable and has any parallel loops.  If so,
+ * take it as the outermost tilable band.  If not, continue looking for the
  * outermost tilable band in the children of the current band.
  */
 static void band_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_band *band, int pos, struct band_info *info)
+	__isl_take isl_schedule_node *node, int pos, struct band_info *info)
 {
-	int n = isl_band_n_member(band);
+	int n = isl_schedule_node_band_n_member(node);
 	int n_parallel;
 
 	for (n_parallel = 0; n_parallel < n; ++n_parallel)
-		if (!isl_band_member_is_coincident(band, n_parallel))
+		if (!isl_schedule_node_band_member_get_coincident(node,
+								n_parallel))
 			break;
 
-	info->n_parallel = n_parallel;
-	if (n_parallel) {
-		gen->any_parallelism = 1;
-		info->gen = gen;
-		info->tile_first = pos;
-		info->tile_len = n;
-		info->prefix = isl_band_get_prefix_schedule(band);
-		info->suffix = isl_union_map_flat_range_product(
-				isl_band_get_partial_schedule(band),
-				isl_band_get_suffix_schedule(band));
-		isl_union_map_foreach_map(info->prefix,
-					    &set_stmt_tile_len, info);
-	} else if (isl_band_has_children(band)) {
-		isl_band_list *children;
-		children = isl_band_get_children(band);
-		list_select_outer_band(gen, children, pos + n, info);
-	} else {
-		info->gen = gen;
-		info->tile_first = pos + n;
-		info->tile_len = 0;
-		info->prefix = isl_union_map_flat_range_product(
-				isl_band_get_prefix_schedule(band),
-				isl_band_get_partial_schedule(band));
-		info->suffix = isl_band_get_suffix_schedule(band);
-		isl_union_map_foreach_map(info->prefix,
-					    &set_stmt_tile_len, info);
+	if (!isl_schedule_node_band_get_permutable(node) || n_parallel == 0) {
+		node = isl_schedule_node_child(node, 0);
+		select_outer_band(gen, node, pos + n, info);
+		return;
 	}
 
-	isl_band_free(band);
+	info->n_parallel = n_parallel;
+	gen->any_parallelism = 1;
+	info->gen = gen;
+	info->tile_first = pos;
+	info->tile_len = n;
+	info->prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
+	info->suffix = isl_schedule_node_get_subtree_schedule_union_map(node);
+	isl_union_map_foreach_map(info->prefix, &set_stmt_tile_len, info);
+
+	isl_schedule_node_free(node);
 }
 
 /* Comparison function that returns a non-zero value for band_infos
@@ -5386,6 +5346,26 @@ static __isl_give isl_union_map *extend_range(
 	return umap;
 }
 
+/* Insert a new dimension at position "pos" in the range of "umap"
+ * with fixed value "val", assuming the original dimension of the range
+ * of "umap" is "src_len".
+ */
+static __isl_give isl_union_map *insert_range(__isl_take isl_union_map *umap,
+	int src_len, int pos, int val)
+{
+	isl_space *space;
+	isl_map *map;
+
+	space = isl_union_map_get_space(umap);
+	map = project_out(space, src_len + 1, pos, 1);
+	map = isl_map_reverse(map);
+	map = isl_map_fix_si(map, isl_dim_out, pos, val);
+
+	umap = isl_union_map_apply_range(umap, isl_union_map_from_map(map));
+
+	return umap;
+}
+
 /* Group bands with the same values for tile_len and n_parallel.
  * The prefix schedule is then extended with a fixed coordinate that
  * is different for each such group.
@@ -5413,19 +5393,20 @@ static void separate_bands(struct band_info *info, int n)
 	}
 }
 
-/* Select the outermost bands in the elements of the list, align
- * their prefix schedules, separate bands with different values
- * for tile_len and/or n_parallel and then combine the resulting
+/* Select the outermost bands in the elements of the sequence or set
+ * node "node", align their prefix schedules.  Separate all bands
+ * if "serialize" is set and otherwise separate bands with different values
+ * for tile_len and/or n_parallel.  Finally, combine the resulting
  * prefix and suffix schedules into a single pair of prefix and
  * suffix schedules for the entire list.
  */
 static void list_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_band_list *list, int pos, struct band_info *list_info)
+	__isl_take isl_schedule_node *node, int pos,
+	struct band_info *list_info, int serialize)
 {
-	isl_band *band;
 	int i;
-	int n = isl_band_list_n_band(list);
-	isl_ctx *ctx = isl_band_list_get_ctx(list);
+	int n = isl_schedule_node_n_children(node);
+	isl_ctx *ctx = isl_schedule_node_get_ctx(node);
 	struct band_info *info;
 	int max_tile_first;
 	isl_union_map *prefix;
@@ -5437,8 +5418,9 @@ static void list_select_outer_band(struct gpu_gen *gen,
 
 	max_tile_first = 0;
 	for (i = 0; i < n; ++i) {
-		band = isl_band_list_get_band(list, i);
-		band_select_outer_band(gen, band, pos, &info[i]);
+		isl_schedule_node *child;
+		child = isl_schedule_node_get_child(node, i);
+		select_outer_band(gen, child, pos, &info[i]);
 		if (info[i].tile_first > max_tile_first)
 			max_tile_first = info[i].tile_first;
 	}
@@ -5451,15 +5433,24 @@ static void list_select_outer_band(struct gpu_gen *gen,
 		info[i].tile_first = max_tile_first;
 	}
 
-	qsort(info, n, sizeof(struct band_info), &cmp_band);
+	if (serialize) {
+		for (i = 0; i < n; ++i) {
+			int l = info[i].tile_first;
+			info[i].prefix = insert_range(info[i].prefix, l,
+							pos, i);
+			info[i].tile_first = l + 1;
+		}
+	} else {
+		qsort(info, n, sizeof(struct band_info), &cmp_band);
 
-	for (i = 0; i < n - 1; ++i)
-		if (info[i].tile_len != info[i + 1].tile_len ||
-		    info[i].n_parallel != info[i + 1].n_parallel)
-			break;
+		for (i = 0; i < n - 1; ++i)
+			if (info[i].tile_len != info[i + 1].tile_len ||
+			    info[i].n_parallel != info[i + 1].n_parallel)
+				break;
 
-	if (i < n -1)
-		separate_bands(info, n);
+		if (i < n - 1)
+			separate_bands(info, n);
+	}
 
 	prefix = info[0].prefix;
 	suffix = info[0].suffix;
@@ -5474,8 +5465,88 @@ static void list_select_outer_band(struct gpu_gen *gen,
 	list_info->prefix = prefix;
 	list_info->suffix = suffix;
 
-	isl_band_list_free(list);
+	isl_schedule_node_free(node);
 	free(info);
+}
+
+/* Select the outermost bands in the elements of the set node "node".
+ * If the schedule_separate_components is set, then separate all bands.
+ */
+static void set_select_outer_band(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node, int pos,
+	struct band_info *list_info)
+{
+	isl_ctx *ctx = isl_schedule_node_get_ctx(node);
+	int serialize;
+
+	serialize = isl_options_get_schedule_separate_components(ctx);
+	list_select_outer_band(gen, node, pos, list_info, serialize);
+}
+
+/* Select the outermost bands in the elements of the sequence node "node",
+ * separating all bands.
+ */
+static void sequence_select_outer_band(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node, int pos,
+	struct band_info *list_info)
+{
+	list_select_outer_band(gen, node, pos, list_info, 1);
+}
+
+/* If we reach a leaf node, then we have not found any outer tilable
+ * band with parallel loops, so consider the leaf node as the outermost
+ * tilable band.
+ */
+static void leaf_select_outer_band(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node, int pos, struct band_info *info)
+{
+	info->gen = gen;
+	info->tile_first = pos;
+	info->tile_len = 0;
+	info->prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
+	info->suffix = isl_schedule_node_get_subtree_schedule_union_map(node);
+	isl_union_map_foreach_map(info->prefix, &set_stmt_tile_len, info);
+
+	isl_schedule_node_free(node);
+}
+
+/* Select the outermost tilable band in the subtree that "node" points to.
+ */
+static void select_outer_band(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node, int pos, struct band_info *info)
+{
+	enum isl_schedule_node_type type;
+
+	type = isl_schedule_node_get_type(node);
+	switch (type) {
+	case isl_schedule_node_domain:
+	case isl_schedule_node_filter:
+		node = isl_schedule_node_child(node, 0);
+		select_outer_band(gen, node, pos, info);
+		return;
+	case isl_schedule_node_leaf:
+		leaf_select_outer_band(gen, node, pos, info);
+		return;
+	case isl_schedule_node_band:
+		band_select_outer_band(gen, node, pos, info);
+		return;
+	case isl_schedule_node_set:
+		set_select_outer_band(gen, node, pos, info);
+		return;
+	case isl_schedule_node_sequence:
+		sequence_select_outer_band(gen, node, pos, info);
+		return;
+	default:
+		isl_die(isl_schedule_node_get_ctx(node),
+			isl_error_unsupported, "unhandled schedule node type",
+			node = node);
+	case isl_schedule_node_error:
+		info->prefix = NULL;
+		info->suffix = NULL;
+		break;
+	}
+
+	isl_schedule_node_free(node);
 }
 
 /* Select the outermost tilable band that (by construction)
@@ -5491,20 +5562,14 @@ static void list_select_outer_band(struct gpu_gen *gen,
 static __isl_give isl_union_map *select_outer_tilable_band(struct gpu_gen *gen,
 	__isl_keep isl_schedule *schedule)
 {
-	isl_band_list *list;
+	isl_schedule_node *node;
 	struct band_info info;
 
 	gen->n_parallel = 0;
 	gen->tile_len = -1;
 
-	list = isl_schedule_get_band_forest(schedule);
-
-	if (isl_band_list_n_band(list) == 0) {
-		isl_band_list_free(list);
-		return isl_schedule_get_map(schedule);
-	}
-
-	list_select_outer_band(gen, list, 0, &info);
+	node = isl_schedule_get_root(schedule);
+	select_outer_band(gen, node, 0, &info);
 
 	gen->tile_first = info.tile_first;
 	info.suffix = align_range(info.suffix);
@@ -5569,9 +5634,9 @@ static void compute_schedule(struct gpu_gen *gen)
 	isl_schedule *schedule;
 
 	domain = isl_union_set_copy(gen->prog->scop->domain);
-	domain = isl_union_set_intersect_params(domain,
-				isl_set_copy(gen->prog->scop->context));
 	sc = isl_schedule_constraints_on_domain(isl_union_set_copy(domain));
+	sc = isl_schedule_constraints_set_context(sc,
+				isl_set_copy(gen->prog->scop->context));
 	if (gen->options->live_range_reordering) {
 		sc = isl_schedule_constraints_set_conditional_validity(sc,
 			isl_union_map_copy(gen->prog->scop->tagged_dep_flow),
@@ -5737,6 +5802,55 @@ struct ppcg_extract_access_data {
 	isl_union_map *any_to_outer;
 };
 
+/* Given a tagged access relation to a single array "tagged", extract it
+ * as a map, taking into account that the input may be empty.
+ * If the access relation is empty, then it does not contain
+ * any space information, so we try to recover it from the index
+ * expression.
+ * The space of the index expression is of the form I -> A,
+ * with I the statement instances and A the array, or [I -> F] -> A,
+ * with F the filters corresponding to arguments.
+ * We first drop F, if present, obtaining I -> A.
+ * Then we construct I -> R, with R the reference tag,
+ * combine the two into I -> [R -> A] and uncurry to obtain
+ * the final result [I -> R] -> A.
+ * Note that the index expression may have a lower dimension
+ * than that of the array, but this dimension is not used
+ * if the access relation is empty.
+ */
+static __isl_give isl_map *extract_single_tagged_access(
+	__isl_take isl_union_map *tagged, __isl_keep pet_expr *expr)
+{
+	int empty;
+	isl_id *id;
+	isl_space *space, *space2;
+	isl_multi_pw_aff *index;
+
+	empty = isl_union_map_is_empty(tagged);
+	if (empty < 0)
+		goto error;
+	if (!empty)
+		return isl_map_from_union_map(tagged);
+	isl_union_map_free(tagged);
+
+	index = pet_expr_access_get_index(expr);
+	space = isl_multi_pw_aff_get_space(index);
+	isl_multi_pw_aff_free(index);
+	if (isl_space_domain_is_wrapping(space))
+		space = isl_space_domain_factor_domain(space);
+	space2 = isl_space_copy(space);
+	space2 = isl_space_from_domain(isl_space_domain(space));
+	id = pet_expr_access_get_ref_id(expr);
+	space2 = isl_space_set_tuple_id(space2, isl_dim_out, id);
+	space = isl_space_range_product(space2, space);
+	space = isl_space_uncurry(space);
+
+	return isl_map_empty(space);
+error:
+	isl_union_map_free(tagged);
+	return NULL;
+}
+
 /* Extract a gpu_stmt_access from "expr", append it to the list
  * that ends in *data->next_access and update the end of the list.
  * If the access expression performs a write, then it is considered
@@ -5751,16 +5865,11 @@ struct ppcg_extract_access_data {
 static int extract_access(__isl_keep pet_expr *expr, void *user)
 {
 	struct ppcg_extract_access_data *data = user;
-	isl_union_map *may, *tagged;
+	isl_union_map *tagged;
 	struct gpu_stmt_access *access;
-	isl_ctx *ctx;
+	isl_ctx *ctx = pet_expr_get_ctx(expr);
 	isl_multi_pw_aff *index;
 
-	may = pet_expr_access_get_may_read(expr);
-	may = isl_union_map_union(may, pet_expr_access_get_may_write(expr));
-	may = isl_union_map_apply_range(may,
-					isl_union_map_copy(data->any_to_outer));
-	ctx = isl_union_map_get_ctx(may);
 	access = isl_alloc_type(ctx, struct gpu_stmt_access);
 	assert(access);
 	access->next = NULL;
@@ -5771,26 +5880,33 @@ static int extract_access(__isl_keep pet_expr *expr, void *user)
 				pet_expr_access_get_tagged_may_write(expr));
 	tagged = isl_union_map_apply_range(tagged,
 					isl_union_map_copy(data->any_to_outer));
-	access->tagged_access = isl_map_from_union_map(tagged);
 	if (!access->write) {
 		access->exact_write = 1;
 	} else if (!data->single_expression) {
 		access->exact_write = 0;
 	} else {
-		isl_union_map *must;
+		isl_union_map *must, *may;
+		may = isl_union_map_copy(tagged);
+		may = isl_union_map_domain_factor_domain(may);
 		must = pet_expr_access_get_must_write(expr);
 		access->exact_write = isl_union_map_is_equal(must, may);
 		isl_union_map_free(must);
+		isl_union_map_free(may);
 	}
-	access->access = isl_map_from_union_map(may);
 	index = pet_expr_access_get_index(expr);
 	access->n_index = isl_multi_pw_aff_dim(index, isl_dim_out);
 	isl_multi_pw_aff_free(index);
 	access->ref_id = pet_expr_access_get_ref_id(expr);
 	access->group = -1;
+	access->tagged_access = extract_single_tagged_access(tagged, expr);
+	access->access = isl_map_copy(access->tagged_access);
+	access->access = isl_map_domain_factor_domain(access->access);
 
 	*data->next_access = access;
 	data->next_access = &(*data->next_access)->next;
+
+	if (!access->access)
+		return -1;
 
 	return 0;
 }
@@ -5799,7 +5915,7 @@ static int extract_access(__isl_keep pet_expr *expr, void *user)
  * one for each access expression in the statement body.
  * "any_to_outer" maps all intermediate arrays to their outer arrays.
  */
-static void pet_stmt_extract_accesses(struct gpu_stmt *stmt,
+static int pet_stmt_extract_accesses(struct gpu_stmt *stmt,
 	__isl_keep isl_union_map *any_to_outer)
 {
 	struct ppcg_extract_access_data data;
@@ -5809,7 +5925,8 @@ static void pet_stmt_extract_accesses(struct gpu_stmt *stmt,
 	data.single_expression =
 		pet_tree_get_type(stmt->stmt->body) == pet_tree_expr;
 	data.any_to_outer = any_to_outer;
-	pet_tree_foreach_access_expr(stmt->stmt->body, &extract_access, &data);
+	return pet_tree_foreach_access_expr(stmt->stmt->body,
+						&extract_access, &data);
 }
 
 /* Return an array of gpu_stmt representing the statements in "scop".
@@ -5829,7 +5946,8 @@ static struct gpu_stmt *extract_stmts(isl_ctx *ctx, struct ppcg_scop *scop,
 
 		s->id = isl_set_get_tuple_id(scop->pet->stmts[i]->domain);
 		s->stmt = scop->pet->stmts[i];
-		pet_stmt_extract_accesses(s, any_to_outer);
+		if (pet_stmt_extract_accesses(s, any_to_outer) < 0)
+			return free_stmts(stmts, i + 1);
 	}
 
 	return stmts;
