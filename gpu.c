@@ -5992,7 +5992,7 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 		isl_union_map_free(gen.used_sizes);
 	}
 
-	isl_ast_print_options_free(print_cpu_options);
+	isl_ast_print_options_free(gen.host_print_options);
 	isl_union_map_free(gen.sizes);
 	for (i = 0; i < gen.types.n; ++i)
 		free(gen.types.name[i]);
