@@ -437,7 +437,7 @@ static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
 	isl_ast_node *tree;
 	isl_id_list *iterators;
 	struct ast_build_userinfo build_info;
-	int depth;
+	int depth = 0; // Use in case schedule_map is empty
 
 	context = isl_set_copy(scop->context);
 	domain_set = isl_union_set_copy(scop->domain);
@@ -466,7 +466,7 @@ static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
 	tree = isl_ast_build_ast_from_schedule(build, schedule_map);
 	isl_ast_build_free(build);
 
-	if (print_options)
+	if (!print_options)
 		print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 							&print_user, NULL);
