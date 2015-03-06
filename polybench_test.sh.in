@@ -104,10 +104,10 @@ if [ "x@OPENCL_TESTS_ENABLED@" = "xyes" ]; then
         CPPFLAGS_RUNTIME=""
         LDFLAGS_RUNTIME=""
     else
-        CPPFLAGS_RUNTIME="-I@PENCIL_UTIL_SRCDIR@/include -I@PENCIL_UTIL_SRCDIR@/runtime"
-        LDFLAGS_RUNTIME="-L@PENCIL_UTIL_BUILDDIR@/runtime/.libs" 
+        CPPFLAGS_RUNTIME="-I@PENCIL_UTIL_SRCDIR@/include -I@PENCIL_UTIL_SRCDIR@/runtime/include"
+        LDFLAGS_RUNTIME="-L@PENCIL_UTIL_BUILDDIR@/runtime/src"
     fi
-	run_tests ppcg_opencl "--target=opencl ${CPPFLAGS_RUNTIME}" "${CPPFLAGS_RUNTIME} ${LDFLAGS_RUNTIME} -locl_pencil_opt -lOpenCL"
+    run_tests ppcg_opencl "--target=opencl ${CPPFLAGS_RUNTIME}" "${CPPFLAGS_RUNTIME} ${LDFLAGS_RUNTIME} -lprl -lOpenCL"
 fi
 
 if [ $keep = "no" ]; then

@@ -100,8 +100,7 @@ static int opencl_open_files(struct opencl_info *info)
 			info->kernel_c_name);
 	}
 
-	fprintf(info->host_c, "#include <pencil_runtime.h>\n");
-	fprintf(info->host_c, "#include <opencl/pencil_int.h>\n");
+	fprintf(info->host_c, "#include <prl.h>\n");
 	for (i = 0; i < info->options->opencl_n_include_file; ++i) {
 		info->kprinter = isl_printer_print_str(info->kprinter,
 					"#include <");
@@ -226,7 +225,7 @@ static __isl_give isl_printer *opencl_declare_device_arrays(
 		if (!prog->array[i].accessed)
 			continue;
 		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "pencil_cl_mem dev_");
+		p = isl_printer_print_str(p, "prl_cl_mem dev_");
 		p = isl_printer_print_str(p, prog->array[i].name);
 		p = isl_printer_print_str(p, ";");
 		p = isl_printer_end_line(p);
@@ -292,7 +291,7 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "dev_");
 	p = isl_printer_print_str(p, array->name);
-	p = isl_printer_print_str(p, " = opencl_create_device_buffer(");
+	p = isl_printer_print_str(p, " = prl_create_device_buffer(");
 	p = isl_printer_print_str(p, "CL_MEM_READ_WRITE, ");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, "_size, ");
@@ -342,7 +341,7 @@ static __isl_give isl_printer *opencl_allocate_device_arrays(
 	return p;
 }
 
-/* Print a call to the OpenCL or PENCIL runtime function which sets
+/* Print a call to the OpenCL or libprl function which sets
  * the arguments of the kernel.  arg_name and arg_index are the name and the
  * index of the kernel argument.  The index of the leftmost argument of
  * the kernel is 0 whereas the index of the rightmost argument of the kernel
@@ -355,7 +354,7 @@ static __isl_give isl_printer *opencl_set_kernel_argument(
 	const char *arg_name, int arg_index, int read_only_scalar)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "opencl_set_kernel_arg(");
+	p = isl_printer_print_str(p, "prl_set_kernel_arg(");
 	p = isl_printer_print_str(p, "kernel");
 	p = isl_printer_print_int(p, kernel_id);
 	p = isl_printer_print_str(p, ", ");
@@ -1128,9 +1127,9 @@ static __isl_give isl_printer *pencil_runtime_copy_array(
 {
 	p = isl_printer_start_line(p);
 	if (to_host)
-		p = isl_printer_print_str(p, "opencl_copy_to_host");
+		p = isl_printer_print_str(p, "prl_copy_to_host");
 	else
-		p = isl_printer_print_str(p, "opencl_copy_to_device");
+		p = isl_printer_print_str(p, "prl_copy_to_device");
 	p = isl_printer_print_str(p, "(dev_");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", ");
@@ -1310,9 +1309,9 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_end_line(p);
 
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "pencil_cl_kernel kernel");
+	p = isl_printer_print_str(p, "prl_cl_kernel kernel");
 	p = isl_printer_print_int(p, kernel->id);
-	p = isl_printer_print_str(p, " = opencl_create_kernel(program, "
+	p = isl_printer_print_str(p, " = prl_create_kernel(program, "
 								 "\"kernel");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, "\");");
@@ -1321,7 +1320,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 	opencl_set_kernel_arguments(p, data->prog, kernel, data->opencl);
 
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "opencl_launch_kernel(kernel");
+	p = isl_printer_print_str(p, "prl_launch_kernel(kernel");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, ", ");
 	if (kernel->n_block > 0)
@@ -1331,7 +1330,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_print_str(p, ", NULL, global_work_size, block_size);");
 	p = isl_printer_end_line(p);
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "opencl_release_kernel(kernel");
+	p = isl_printer_print_str(p, "prl_release_kernel(kernel");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
@@ -1376,11 +1375,11 @@ static __isl_give isl_printer *pencil_runtime_setup(
 	__isl_take isl_printer *p, const char *input, struct opencl_info *info)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "pencil_cl_program program;");
+	p = isl_printer_print_str(p, "prl_cl_program program;");
 	p = isl_printer_end_line(p);
 
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "pencil_init(PENCIL_TARGET_DEVICE_DYNAMIC);");
+	p = isl_printer_print_str(p, "prl_init(PRL_TARGET_DEVICE_DYNAMIC);");
 	p = isl_printer_end_line(p);
 
 	p = isl_printer_start_line(p);
@@ -1388,10 +1387,10 @@ static __isl_give isl_printer *pencil_runtime_setup(
 
 	if (info->options->opencl_embed_kernel_code) {
 		p = isl_printer_print_str(p,
-			"opencl_create_program_from_string(kernel_code, "
+			"prl_create_program_from_string(kernel_code, "
 			"sizeof(kernel_code), \"");
 	} else {
-		p = isl_printer_print_str(p, "opencl_create_program_from_file("
+		p = isl_printer_print_str(p, "prl_create_program_from_file("
 									 "\"");
 		p = isl_printer_print_str(p, info->kernel_c_name);
 		p = isl_printer_print_str(p, "\", \"");
@@ -1408,7 +1407,7 @@ static __isl_give isl_printer *pencil_runtime_setup(
 static __isl_give isl_printer *pencil_runtime_release(__isl_take isl_printer *p)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "pencil_shutdown();");
+	p = isl_printer_print_str(p, "prl_shutdown();");
 	p = isl_printer_end_line(p);
 
 	return p;
@@ -1420,7 +1419,7 @@ static __isl_give isl_printer *release_device_array(__isl_take isl_printer *p,
 	struct gpu_array_info *array, struct opencl_info *info)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "opencl_release_buffer(dev_");
+	p = isl_printer_print_str(p, "prl_release_buffer(dev_");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ");");
 	p = isl_printer_end_line(p);
