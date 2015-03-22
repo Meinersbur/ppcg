@@ -296,7 +296,7 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, "_size, ");
 	if (needs_ptr) {
-		p = isl_printer_print_str(p, "&");
+		p = isl_printer_print_str(p, "(void*) &");
 		p = isl_printer_print_str(p, array->name);
 	}
 	else
