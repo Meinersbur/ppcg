@@ -26,208 +26,20 @@
 
 #include "cpu.h"
 #include "gpu.h"
+#include "gpu_array_tile.h"
+#include "gpu_group.h"
+#include "gpu_tree.h"
 #include "schedule.h"
 #include "ppcg_options.h"
 #include "print.h"
 
-/* The fields stride and shift only contain valid information
- * if shift != NULL.
- * If so, they express that current index is such that if you add shift,
- * then the result is always a multiple of stride.
- * Let D represent the initial shared_len dimensions of the computed schedule.
- * The spaces of "lb" and "shift" are of the form
- *
- *	D -> [b]
- */
-struct gpu_array_bound {
-	isl_val *size;
-	isl_aff *lb;
-
-	isl_val *stride;
-	isl_aff *shift;
-};
-
-/* A tile of an array.
- *
- * n is the dimension of the array.
- * bound is an array of size "n" representing the lower bound
- *	and size for each index.
- *
- * tiling maps a tile in the global array to the corresponding
- * shared/private memory tile and is of the form
- *
- *	{ [D[i] -> A[a]] -> T[(a + shift(i))/stride - lb(i)] }
- *
- * where D represents the initial shared_len dimensions
- * of the computed schedule.
- */
-struct gpu_array_tile {
-	int n;
-	struct gpu_array_bound *bound;
-	isl_multi_aff *tiling;
-};
-
 struct gpu_array_info;
-
-/* A group of array references in a kernel that should be handled together.
- * If private_tile is not NULL, then it is mapped to registers.
- * Otherwise, if shared_tile is not NULL, it is mapped to shared memory.
- * Otherwise, it is accessed from global memory.
- */
-struct gpu_array_ref_group {
-	/* The references in this group access this array. */
-	struct gpu_array_info *array;
-	/* Position of this group in the list of reference groups of array. */
-	int nr;
-
-	/* The following fields are use during the construction of the groups.
-	 * access is the combined access relation relative to the shared
-	 * memory tiling.  In particular, the domain of the map corresponds
-	 * to the first shared_len dimensions of the computed schedule.
-	 * write is set if any access in the group is a write.
-	 * exact_write is set if all writes are definite writes.
-	 * slice is set if there is at least one access in the group
-	 * that refers to more than one element
-	 */
-	isl_map *access;
-	int write;
-	int exact_write;
-	int slice;
-
-	/* The shared memory tile, NULL if none. */
-	struct gpu_array_tile *shared_tile;
-
-	/* The private memory tile, NULL if none. */
-	struct gpu_array_tile *private_tile;
-
-	/* References in this group; point to elements of a linked list. */
-	int n_ref;
-	struct gpu_stmt_access **refs;
-
-	/* Last shared memory tile dimension that affects tile of this group. */
-	int last_shared;
-};
-
-struct gpu_gen {
-	isl_ctx *ctx;
-	struct ppcg_options *options;
-
-	/* Callback for printing of AST in appropriate format. */
-	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
-		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-		struct gpu_types *types, void *user);
-	void *print_user;
 
 	/* print options for how to print host code */
 	isl_ast_print_options *host_print_options;
 
 	/* Add preprocessor macros for floord, min, max? */
 	int host_print_macros;
-
-	struct gpu_prog *prog;
-	/* The generated AST. */
-	isl_ast_node *tree;
-
-	/* The sequence of types for which a definition has been printed. */
-	struct gpu_types types;
-
-	/* User specified tile, grid and block sizes for each kernel */
-	isl_union_map *sizes;
-
-	/* Effectively used tile, grid and block sizes for each kernel */
-	isl_union_map *used_sizes;
-
-	/* Identifier of current kernel. */
-	int kernel_id;
-	/* Pointer to the current kernel. */
-	struct ppcg_kernel *kernel;
-	/* Does the computed schedule exhibit any parallelism? */
-	int any_parallelism;
-
-	/* First tile dimension. */
-	int tile_first;
-	/* Number of tile dimensions. */
-	int tile_len;
-	/* Number of initial parallel loops among tile dimensions. */
-	int n_parallel;
-
-	/* Number of dimensions determining shared memory. */
-	int shared_len;
-
-	/* Number of rows in the untiled schedule. */
-	int untiled_len;
-	/* Number of rows in the tiled schedule. */
-	int tiled_len;
-	/* Number of rows in schedule after tiling/wrapping over threads. */
-	int thread_tiled_len;
-
-	/* Global untiled schedule. */
-	isl_union_map *sched;
-	/* Local (per kernel launch) tiled schedule. */
-	isl_union_map *tiled_sched;
-	/* Local schedule per shared memory tile loop iteration. */
-	isl_union_map *local_sched;
-
-	/* Local tiled schedule projected onto the shared tile loops and
-	 * the loops that will be wrapped over the threads,
-	 * with all shared tile loops parametrized.
-	 */
-	isl_union_map *shared_sched;
-	/* Projects out the loops that will be wrapped over the threads
-	 * from shared_sched.
-	 */
-	isl_union_map *shared_proj;
-
-	/* A map that takes the range of shared_sched as input,
-	 * wraps the appropriate loops over the threads and then projects
-	 * out these loops.
-	 */
-	isl_map *privatization;
-
-	/* The array reference group corresponding to copy_sched. */
-	struct gpu_array_ref_group *copy_group;
-
-	/* Is any array in the current kernel marked force_private? */
-	int any_force_private;
-
-	/* First loop to unroll (or -1 if none) in the current part of the
-	 * schedule.
-	 */
-	int first_unroll;
-
-	int n_grid;
-	int n_block;
-	/* Note: in the input file, the sizes of the grid and the blocks
-	 * are specified in the order x, y, z, but internally, the sizes
-	 * are stored in reverse order, so that the last element always
-	 * refers to the x dimension.
-	 */
-	int grid_dim[3];
-	int block_dim[3];
-	int *tile_size;
-};
-
-/* Print the name of the local copy of a given group of array references.
- */
-static __isl_give isl_printer *print_array_name(__isl_take isl_printer *p,
-	struct gpu_array_ref_group *group)
-{
-	int global = 0;
-
-	if (group->private_tile)
-		p = isl_printer_print_str(p, "private_");
-	else if (group->shared_tile)
-		p = isl_printer_print_str(p, "shared_");
-	else
-		global = 1;
-	p = isl_printer_print_str(p, group->array->name);
-	if (!global && group->array->n_group > 1) {
-		p = isl_printer_print_str(p, "_");
-		p = isl_printer_print_int(p, group->nr);
-	}
-
-	return p;
-}
 
 /* Collect all references to the given array and store pointers to them
  * in array->refs.
@@ -277,51 +89,6 @@ static void collect_references(struct gpu_prog *prog,
 			array->refs[n++] = access;
 		}
 	}
-}
-
-/* Create a gpu_array_tile for an array of dimension "n_index".
- */
-static struct gpu_array_tile *create_tile(isl_ctx *ctx, int n_index)
-{
-	int i;
-	struct gpu_array_tile *tile;
-
-	tile = isl_calloc_type(ctx, struct gpu_array_tile);
-	assert(tile);
-
-	tile->n = n_index;
-
-	tile->bound = isl_alloc_array(ctx, struct gpu_array_bound, n_index);
-	assert(tile->bound);
-
-	for (i = 0; i < n_index; ++i) {
-		tile->bound[i].size = NULL;
-		tile->bound[i].lb = NULL;
-		tile->bound[i].stride = NULL;
-		tile->bound[i].shift = NULL;
-	}
-
-	return tile;
-}
-
-static void *free_tile(struct gpu_array_tile *tile)
-{
-	int j;
-
-	if (!tile)
-		return NULL;
-
-	for (j = 0; j < tile->n; ++j) {
-		isl_val_free(tile->bound[j].size);
-		isl_val_free(tile->bound[j].stride);
-		isl_aff_free(tile->bound[j].lb);
-		isl_aff_free(tile->bound[j].shift);
-	}
-	free(tile->bound);
-	isl_multi_aff_free(tile->tiling);
-	free(tile);
-
-	return NULL;
 }
 
 /* Compute and return the extent of "array", taking into account the set of
@@ -776,97 +543,102 @@ static void set_used_sizes(struct gpu_gen *gen, const char *type, int id,
 
 /* Extract user specified "tile" sizes from the "sizes" command line option,
  * defaulting to option->tile_size in each dimension.
+ * *tile_len contains the maximum number of tile sizes needed.
+ * Update *tile_len to the number of specified tile sizes, if any, and
+ * return a pointer to the tile sizes (or NULL on error).
  * Add the effectively used sizes to gen->used_sizes.
  */
-static void read_tile_sizes(struct gpu_gen *gen)
+static int *read_tile_sizes(struct gpu_gen *gen, int *tile_len)
 {
 	int n;
+	int *tile_size;
 	isl_set *size;
 
-	gen->tile_size = isl_alloc_array(gen->ctx, int, gen->tile_len);
-	assert(gen->tile_size);
-	for (n = 0; n < gen->tile_len; ++n)
-		gen->tile_size[n] = gen->options->tile_size;
+	tile_size = isl_alloc_array(gen->ctx, int, *tile_len);
+	if (!tile_size)
+		return NULL;
+	for (n = 0; n < *tile_len; ++n)
+		tile_size[n] = gen->options->tile_size;
 
 	size = extract_sizes(gen->sizes, "tile", gen->kernel_id);
-	read_sizes_from_set(size, gen->tile_size, &gen->tile_len);
-	set_used_sizes(gen, "tile", gen->kernel_id,
-			gen->tile_size, gen->tile_len);
+	read_sizes_from_set(size, tile_size, tile_len);
+	set_used_sizes(gen, "tile", gen->kernel_id, tile_size, *tile_len);
 
-	if (gen->n_parallel > gen->tile_len)
-		gen->n_parallel = gen->tile_len;
+	return tile_size;
 }
 
 /* Extract user specified "block" sizes from the "sizes" command line option,
  * after filling in some potentially useful defaults.
- * Add the effectively used sizes to gen->used_sizes.
  */
-static void read_block_sizes(struct gpu_gen *gen)
+static void read_block_sizes(struct ppcg_kernel *kernel,
+	__isl_keep isl_union_map *sizes)
 {
-	int n;
 	isl_set *size;
 
-	n = gen->n_parallel;
-	gen->n_block = (n <= 3) ? n : 3;
-	switch (gen->n_block) {
+	if (kernel->n_block > 3)
+		kernel->n_block = 3;
+	switch (kernel->n_block) {
 	case 1:
-		gen->block_dim[0] = 512;
+		kernel->block_dim[0] = 512;
 		break;
 	case 2:
-		gen->block_dim[0] = 32;
-		gen->block_dim[1] = 16;
+		kernel->block_dim[0] = 32;
+		kernel->block_dim[1] = 16;
 		break;
 	default:
-		gen->block_dim[0] = 32;
-		gen->block_dim[1] = 4;
-		gen->block_dim[2] = 4;
+		kernel->block_dim[0] = 32;
+		kernel->block_dim[1] = 4;
+		kernel->block_dim[2] = 4;
 		break;
 	}
 
-	size = extract_sizes(gen->sizes, "block", gen->kernel_id);
-	read_sizes_from_set(size, gen->block_dim, &gen->n_block);
-	set_used_sizes(gen, "block", gen->kernel_id,
-			gen->block_dim, gen->n_block);
+	size = extract_sizes(sizes, "block", kernel->id);
+	read_sizes_from_set(size, kernel->block_dim, &kernel->n_block);
 }
 
 /* Extract user specified "grid" sizes from the "sizes" command line option,
  * after filling in some potentially useful defaults.
- * Add the effectively used sizes to gen->used_sizes.
  */
-static void read_grid_sizes(struct gpu_gen *gen)
+static void read_grid_sizes(struct ppcg_kernel *kernel,
+	__isl_keep isl_union_map *sizes)
 {
-	int n = gen->n_parallel;
 	isl_set *size;
 
-	gen->n_grid = (n <= 3) ? n : 3;
-	switch (gen->n_grid) {
+	if (kernel->n_grid > 3)
+		kernel->n_grid = 3;
+	switch (kernel->n_grid) {
 	case 1:
-		gen->grid_dim[0] = 32768;
+		kernel->grid_dim[0] = 32768;
 		break;
 	case 2:
-		gen->grid_dim[0] = 256;
-		gen->grid_dim[1] = 256;
+		kernel->grid_dim[0] = 256;
+		kernel->grid_dim[1] = 256;
 		break;
 	default:
-		gen->grid_dim[0] = 64;
-		gen->grid_dim[1] = 64;
-		gen->grid_dim[2] = 64;
+		kernel->grid_dim[0] = 64;
+		kernel->grid_dim[1] = 64;
+		kernel->grid_dim[2] = 64;
 		break;
 	}
 
-	size = extract_sizes(gen->sizes, "grid", gen->kernel_id);
-	read_sizes_from_set(size, gen->grid_dim, &gen->n_grid);
-	set_used_sizes(gen, "grid", gen->kernel_id, gen->grid_dim, gen->n_grid);
+	size = extract_sizes(sizes, "grid", kernel->id);
+	read_sizes_from_set(size, kernel->grid_dim, &kernel->n_grid);
 }
 
-/* Extract user specified sizes from the "sizes" command line option
- * after filling in some potentially useful defaults.
+/* Extract user specified grid and block sizes from the gen->sizes
+ * command line option after filling in some potentially useful defaults.
+ * Store the extracted sizes in "kernel".
+ * Add the effectively used sizes to gen->used_sizes.
  */
-static void read_sizes(struct gpu_gen *gen)
+static void read_grid_and_block_sizes(struct ppcg_kernel *kernel,
+	struct gpu_gen *gen)
 {
-	read_tile_sizes(gen);
-	read_block_sizes(gen);
-	read_grid_sizes(gen);
+	read_block_sizes(kernel, gen->sizes);
+	read_grid_sizes(kernel, gen->sizes);
+	set_used_sizes(gen, "block", kernel->id,
+					    kernel->block_dim, kernel->n_block);
+	set_used_sizes(gen, "grid", kernel->id,
+					    kernel->grid_dim, kernel->n_grid);
 }
 
 static void *free_stmts(struct gpu_stmt *stmts, int n)
@@ -892,402 +664,6 @@ static void *free_stmts(struct gpu_stmt *stmts, int n)
 	free(stmts);
 
 	return NULL;
-}
-
-/* Construct a map from a domain of dimensionality "len"
- * to a domain of dimensionality "len" + "tile_len" that tiles
- * the "tile_len" coordinates starting at "first".
- * In particular, [s_i] -> [s_i / tile_size[i], s_i % tile_size[i]].
- * "dim" prescribes the parameters.
- */
-static __isl_give isl_map *tile(__isl_take isl_space *dim, int len,
-        int first, int tile_len, int *tile_size)
-{
-	int i;
-	isl_basic_map *bmap;
-	isl_constraint *c;
-	isl_local_space *ls;
-
-	dim = isl_space_add_dims(dim, isl_dim_in, len);
-	dim = isl_space_add_dims(dim, isl_dim_out, len + tile_len);
-	bmap = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < len - tile_len; ++i) {
-		int j = i < first ? i : i + tile_len;
-		int k = i < first ? i : i + 2 * tile_len;
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, j, -1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, k, 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-	}
-
-	for (i = 0; i < tile_len; ++i) {
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in,
-						first + i, -1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						first + i, tile_size[i]);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						first + i + tile_len, 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-
-		c = isl_inequality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						   first + i + tile_len, 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-
-		c = isl_inequality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						   first + i + tile_len, -1);
-		c = isl_constraint_set_constant_si(c, tile_size[i] - 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-	}
-
-	isl_local_space_free(ls);
-
-	return isl_map_from_basic_map(bmap);
-}
-
-/* Construct a map from a domain of dimensionality "len"
- * to a domain of dimensionality "len" + "wrap_len" that "wraps"
- * the "wrap_len" coordinates starting at "first" according to "wrap_size".
- * In particular, [s_i] -> [s_i, s_i % wrap_size[i]]. // i0 -> [??,g0]
- * To do so, we need extra variables corresponding to [s_i / wrap_size[i]],
- * that are projected out at the end.
- * "dim" prescribes the parameters.
- */
-static __isl_give isl_map *wrap(__isl_take isl_space *dim, int len,
-        int first, int wrap_len, int *wrap_size)
-{
-	int i;
-	isl_basic_map *bmap;
-	isl_constraint *c;
-	isl_local_space *ls;
-
-	dim = isl_space_add_dims(dim, isl_dim_in, len);
-	dim = isl_space_add_dims(dim, isl_dim_out, len + 2 * wrap_len);
-	bmap = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < len; ++i) {
-		int k = i < first + wrap_len ? i : i + 2 * wrap_len;
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i, -1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, k, 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-	}
-
-	for (i = 0; i < wrap_len; ++i) {
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						    first + i, -1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						    first + wrap_len + i, 1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-				    first + 2 * wrap_len + i, wrap_size[i]);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-
-		c = isl_inequality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						    first + wrap_len + i, 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-
-		c = isl_inequality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out,
-						    first + wrap_len + i, -1);
-		c = isl_constraint_set_constant_si(c, wrap_size[i] - 1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-	}
-
-	isl_local_space_free(ls);
-
-	bmap = isl_basic_map_project_out(bmap, isl_dim_out,
-				first + 2 * wrap_len, wrap_len);
-
-	return isl_map_from_basic_map(bmap);
-}
-
-/* Add parameters with identifiers "ids" to "set".
- */
-static __isl_give isl_set *add_params(__isl_take isl_set *set,
-	__isl_keep isl_id_list *ids)
-{
-	int i, n;
-	unsigned nparam;
-
-	n = isl_id_list_n_id(ids);
-
-	nparam = isl_set_dim(set, isl_dim_param);
-	set = isl_set_add_dims(set, isl_dim_param, n);
-
-	for (i = 0; i < n; ++i) {
-		isl_id *id;
-
-		id = isl_id_list_get_id(ids, i);
-		set = isl_set_set_dim_id(set, isl_dim_param, nparam + i, id);
-	}
-
-	return set;
-}
-
-/* Equate the dimensions of "set" starting at "first" to
- * freshly created parameters with identifiers "ids".
- * The number of equated dimensions is equal to the number of elements in "ids".
- */
-static __isl_give isl_set *parametrize(__isl_take isl_set *set,
-	int first, __isl_keep isl_id_list *ids)
-{
-	int i, n;
-	unsigned nparam;
-
-	nparam = isl_set_dim(set, isl_dim_param);
-
-	set = add_params(set, ids);
-
-	n = isl_id_list_n_id(ids);
-	for (i = 0; i < n; ++i)
-		set = isl_set_equate(set, isl_dim_param, nparam + i,
-					isl_dim_set, first + i);
-
-	return set;
-}
-
-/* Given a parameter space "space", create a set of dimension "len"
- * of which the dimensions starting at "first" are equated to
- * freshly created parameters with identifiers "ids".
- */
-static __isl_give isl_set *parametrization(__isl_take isl_space *space,
-	int len, int first, __isl_keep isl_id_list *ids)
-{
-	isl_set *set;
-
-	space = isl_space_set_from_params(space);
-	space = isl_space_add_dims(space, isl_dim_set, len);
-	set = isl_set_universe(space);
-
-	return parametrize(set, first, ids);
-}
-
-/* Tile the B loops over the tile sizes and then tile/wrap
- * the T1 loops over the blocks.
- */
-static __isl_give isl_union_map *tile_schedule(struct gpu_gen *gen,
-	__isl_take isl_union_map *sched)
-{
-	isl_space *dim;
-	isl_map *tiling, *block_tiling;
-
-	dim = isl_union_map_get_space(sched);
-	tiling = tile(isl_space_copy(dim), gen->untiled_len,
-		      gen->tile_first, gen->tile_len, gen->tile_size);
-
-	if (gen->options->wrap)
-		block_tiling = wrap(dim, gen->untiled_len + gen->tile_len,
-				gen->tile_first, gen->n_grid, gen->grid_dim);
-	else
-		block_tiling = tile(dim, gen->untiled_len + gen->tile_len,
-				gen->tile_first, gen->n_grid, gen->grid_dim);
-
-	gen->tiled_len = gen->untiled_len + gen->tile_len + gen->n_grid;
-
-	tiling = isl_map_apply_range(tiling, block_tiling);
-
-	sched = isl_union_map_apply_range(sched,
-					     isl_union_map_from_map(tiling));
-
-	gen->shared_len = gen->tile_first + gen->tile_len + gen->n_grid;
-
-	return sched;
-}
-
-/* Equate the "T1P" iterators in the tiled schedule "sched"
- * to the block dimensions.
- */
-static __isl_give isl_union_map *parametrize_tiled_schedule(
-	struct gpu_gen *gen, __isl_take isl_union_map *sched)
-{
-	isl_space *dim;
-	isl_set *par;
-
-	dim = isl_union_map_get_space(sched);
-	par = parametrization(dim, gen->tiled_len,
-		gen->tile_first + gen->n_grid, gen->kernel->block_ids);
-	sched = isl_union_map_intersect_range(sched,
-						isl_union_set_from_set(par));
-
-	return sched;
-}
-
-/* Tile/wrap the P1 loops over the threads.
- */
-static __isl_give isl_union_map *thread_tile_schedule(struct gpu_gen *gen,
-	__isl_take isl_union_map *sched)
-{
-	isl_space *dim;
-	isl_map *tiling;
-	isl_set *par;
-
-	dim = isl_union_map_get_space(sched);
-
-	if (gen->options->wrap)
-		tiling = wrap(isl_space_copy(dim), gen->tiled_len,
-				gen->shared_len, gen->n_block, gen->block_dim);
-	else
-		tiling = tile(isl_space_copy(dim), gen->tiled_len,
-				gen->shared_len, gen->n_block, gen->block_dim);
-	gen->thread_tiled_len = gen->tiled_len + gen->n_block;
-
-	sched = isl_union_map_apply_range(sched,
-					     isl_union_map_from_map(tiling));
-
-	par = parametrization(dim, gen->thread_tiled_len,
-		gen->tile_first + gen->tile_len + gen->n_grid + gen->n_block,
-		gen->kernel->thread_ids);
-	sched = isl_union_map_intersect_range(sched,
-						isl_union_set_from_set(par));
-
-	gen->shared_len = gen->tile_first + gen->tile_len + gen->n_grid;
-
-	return sched;
-}
-
-/* If the user asked for it, scale the shared memory tile loops
- * (T1T and T2) of "sched" by gen->tile_size[i].
- * If we are not performing "wrapping", then additionally scale the T1P
- * loops by gen->grid_dim[i].
- */
-static __isl_give isl_union_map *scale_tile_loops(struct gpu_gen *gen,
-	__isl_take isl_union_map *sched)
-{
-	int i;
-	isl_space *dim;
-	isl_basic_map *scale;
-	isl_constraint *c;
-	isl_local_space *ls;
-
-	if (!gen->options->scale_tile_loops)
-		return sched;
-
-	dim = isl_union_map_get_space(sched);
-	dim = isl_space_add_dims(dim, isl_dim_in, gen->tiled_len);
-	dim = isl_space_add_dims(dim, isl_dim_out, gen->tiled_len);
-	scale = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < gen->tiled_len; ++i) {
-		int f = 1;
-
-		if (i >= gen->tile_first && i < gen->tile_first + gen->n_grid) {
-			f = gen->tile_size[i - gen->tile_first];
-			if (!gen->options->wrap)
-				f *= gen->grid_dim[i - gen->tile_first];
-		} else if (i >= gen->tile_first + gen->n_grid &&
-			   i < gen->tile_first + gen->n_grid + gen->tile_len) {
-			f = gen->tile_size[i - (gen->tile_first + gen->n_grid)];
-		}
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i, f);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, i, -1);
-		scale = isl_basic_map_add_constraint(scale, c);
-	}
-
-	isl_local_space_free(ls);
-
-	sched = isl_union_map_apply_range(sched,
-		isl_union_map_from_map(isl_map_from_basic_map(scale)));
-
-	return sched;
-}
-
-/* If we are not performing "wrapping" and if the user asked for it,
- * scale the thread tile loops (P1T) of "sched" by gen->block_dim[i].
- */
-static __isl_give isl_union_map *scale_thread_tile_loops(struct gpu_gen *gen,
-	__isl_take isl_union_map *sched)
-{
-	int i;
-	isl_space *dim;
-	isl_basic_map *scale;
-	isl_constraint *c;
-	isl_local_space *ls;
-
-	if (gen->options->wrap)
-		return sched;
-	if (!gen->options->scale_tile_loops)
-		return sched;
-
-	dim = isl_union_map_get_space(sched);
-	dim = isl_space_add_dims(dim, isl_dim_in, gen->thread_tiled_len);
-	dim = isl_space_add_dims(dim, isl_dim_out, gen->thread_tiled_len);
-	scale = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < gen->thread_tiled_len; ++i) {
-		int f = 1;
-
-		if (i >= gen->shared_len &&
-		    i < gen->shared_len + gen->n_block)
-			f = gen->block_dim[i - gen->shared_len];
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i, f);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, i, -1);
-		scale = isl_basic_map_add_constraint(scale, c);
-	}
-
-	isl_local_space_free(ls);
-
-	sched = isl_union_map_apply_range(sched,
-		isl_union_map_from_map(isl_map_from_basic_map(scale)));
-
-	return sched;
-}
-
-/* If we are not performing "wrapping" and if the user asked for it,
- * scale the "n_tile" loops starting at "first" of "sched" by gen->block_dim[i].
- */
-static __isl_give isl_union_map *scale_access_tile_loops(struct gpu_gen *gen,
-	__isl_take isl_union_map *sched, int len, int first, int n_tile)
-{
-	int i;
-	isl_space *dim;
-	isl_basic_map *scale;
-	isl_constraint *c;
-	isl_local_space *ls;
-
-	if (gen->options->wrap)
-		return sched;
-	if (!gen->options->scale_tile_loops)
-		return sched;
-
-	dim = isl_union_map_get_space(sched);
-	dim = isl_space_add_dims(dim, isl_dim_in, len);
-	dim = isl_space_add_dims(dim, isl_dim_out, len);
-	scale = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < len; ++i) {
-		int f = 1;
-
-		if (i >= first && i < first + n_tile)
-			f = gen->kernel->block_dim[i - first];
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i, f);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, i, -1);
-		scale = isl_basic_map_add_constraint(scale, c);
-	}
-
-	isl_local_space_free(ls);
-
-	sched = isl_union_map_apply_range(sched,
-		isl_union_map_from_map(isl_map_from_basic_map(scale)));
-
-	return sched;
 }
 
 /* Add parameters p[i] with identifiers "ids" to "set",
@@ -1366,127 +742,6 @@ static __isl_give isl_set *add_bounded_parameters_dynamic(
 	return set;
 }
 
-/* Construct a map from an access to group->array to the corresponding
- * shared/private memory tile.
- * The map is of the form
- *
- *	{ [D[i] -> A[a]] -> T[t] }
- *
- * where D represents the initial shared_len dimensions
- * of the computed schedule.
- */
-static __isl_give isl_map *shift_access(struct gpu_array_ref_group *group)
-{
-	struct gpu_array_tile *tile;
-	isl_multi_aff *tiling;
-
-	tile = group->private_tile;
-	if (!tile)
-		tile = group->shared_tile;
-
-	tiling = isl_multi_aff_copy(tile->tiling);
-
-	return isl_map_from_multi_aff(tiling);
-}
-
-/* Does "map" have an obviously fixed value at variable "pos" of "type"?
- */
-static int map_plain_is_fixed(isl_map *map, enum isl_dim_type type,
-	unsigned pos)
-{
-	isl_val *v;
-	int fixed;
-
-	v = isl_map_plain_get_val_if_fixed(map, type, pos);
-	if (!v)
-		return -1;
-	fixed = isl_val_is_int(v);
-	isl_val_free(v);
-
-	return fixed;
-}
-
-/* Given a schedule that iterates over all elements in a piece of an array,
- * perform tiling/wrapping over the threads.
- *
- * In particular, we tile the final iterators so that the final thread
- * dimension runs over the final array dimension.
- * However, if those final iterators have only a single iteration,
- * we try to tile earlier iterators instead.
- */
-static __isl_give isl_map *tile_access_schedule(struct gpu_gen *gen,
-	__isl_take isl_map *sched)
-{
-	isl_space *dim;
-	isl_union_map *usched;
-	isl_map *tiling;
-	isl_set *par;
-	unsigned nvar = isl_map_dim(sched, isl_dim_out);
-	int n_tile;
-	int first;
-
-	n_tile = gen->kernel->n_block;
-	if (n_tile > nvar) {
-		int i;
-		sched = isl_map_insert_dims(sched,
-						isl_dim_out, 0, n_tile - nvar);
-		for (i = 0; i < n_tile - nvar; ++i)
-			sched = isl_map_fix_si(sched, isl_dim_out, i, 0);
-		nvar = n_tile;
-	}
-
-	first = nvar - n_tile;
-
-	for (; first > 0; first --)
-		if (!map_plain_is_fixed(sched, isl_dim_out, first + n_tile - 1))
-			break;
-
-	dim = isl_map_get_space(sched);
-	dim = isl_space_params(dim);
-	if (gen->options->wrap)
-		tiling = wrap(isl_space_copy(dim), nvar, first,
-				n_tile, gen->kernel->block_dim);
-	else
-		tiling = tile(isl_space_copy(dim), nvar, first,
-				n_tile, gen->kernel->block_dim);
-	sched = isl_map_apply_range(sched, tiling);
-
-	par = parametrization(dim, nvar + n_tile, first + n_tile,
-				gen->kernel->thread_ids);
-	sched = isl_map_intersect_range(sched, par);
-
-	usched = isl_union_map_from_map(sched);
-	usched = scale_access_tile_loops(gen, usched, nvar + n_tile,
-					 first, n_tile);
-	sched = isl_map_from_union_map(usched);
-
-	return sched;
-}
-
-/* Return the union of all read (read = 1) and/or write (write = 1)
- * access relations in the group.
- */
-static __isl_give isl_union_map *group_access_relation(
-	struct gpu_array_ref_group *group, int read, int write)
-{
-	int i;
-	isl_union_map *access;
-
-	access = isl_union_map_empty(isl_map_get_space(group->access));
-	for (i = 0; i < group->n_ref; ++i) {
-		isl_map *map_i;
-
-		if (!((read && group->refs[i]->read) ||
-		     (write && group->refs[i]->write)))
-			continue;
-		map_i = isl_map_copy(group->refs[i]->access);
-		access = isl_union_map_union(access,
-					    isl_union_map_from_map(map_i));
-	}
-
-	return access;
-}
-
 /* Return the union of all tagged access relations in the group.
  */
 static __isl_give isl_union_map *group_tagged_access_relation(
@@ -1547,7 +802,7 @@ static __isl_give isl_set *array_extent(struct gpu_array_info *array)
 	return extent;
 }
 
-/* Return a map from the first shared_len dimensions of the computed
+/* Return a map from the first group->depth dimensions of the computed
  * schedule to the array tile in
  * global memory that corresponds to the shared memory copy.
  *
@@ -1602,728 +857,37 @@ static __isl_give isl_map *group_tile(struct gpu_array_ref_group *group)
 
 /* Given a mapping "iterator_map" from the AST schedule to a domain,
  * return the corresponding mapping from the AST schedule to
- * to the first shared_len dimensions of the schedule computed by PPCG.
+ * to the outer kernel->shared_schedule_dim dimensions of
+ * the schedule computed by PPCG for this kernel.
+ *
+ * Note that kernel->shared_schedule_dim is at least as large as
+ * the largest depth of any array reference group associated to the kernel.
+ * This is needed as the returned schedule is used to extract a mapping
+ * to the outer group->depth dimensions in transform_index.
  */
-static __isl_give isl_pw_multi_aff *compute_sched_to_shared(struct gpu_gen *gen,
-	__isl_take isl_pw_multi_aff *iterator_map)
+static __isl_give isl_pw_multi_aff *compute_sched_to_shared(
+	struct ppcg_kernel *kernel, __isl_take isl_pw_multi_aff *iterator_map)
 {
-	isl_union_map *umap;
+	isl_union_pw_multi_aff *upma;
+	isl_pw_multi_aff *pma;
 	isl_space *space;
-	isl_map *map, *sched;;
 
 	space = isl_space_range(isl_pw_multi_aff_get_space(iterator_map));
 	space = isl_space_from_domain(space);
-	space = isl_space_add_dims(space, isl_dim_out, gen->shared_len);
+	space = isl_space_add_dims(space, isl_dim_out,
+					kernel->shared_schedule_dim);
 
-	umap = isl_union_map_copy(gen->shared_sched);
-	umap = isl_union_map_apply_range(umap,
-			isl_union_map_copy(gen->shared_proj));
-	map = isl_union_map_extract_map(umap, space);
-	isl_union_map_free(umap);
+	upma = isl_union_pw_multi_aff_copy(kernel->shared_schedule);
+	pma = isl_union_pw_multi_aff_extract_pw_multi_aff(upma, space);
+	isl_union_pw_multi_aff_free(upma);
 
-	sched = isl_map_preimage_domain_pw_multi_aff(map, iterator_map);
-	sched = isl_map_detect_equalities(sched);
-
-	return isl_pw_multi_aff_from_map(sched);
-}
-
-/* Set unroll[j] if the input dimension j is involved in
- * the index expression represented by ma.
- */
-static int check_unroll(__isl_take isl_set *set, __isl_take isl_multi_aff *ma,
-	void *user)
-{
-	int i, j;
-	int n_in = isl_multi_aff_dim(ma, isl_dim_in);
-	int n_out = isl_multi_aff_dim(ma, isl_dim_out);
-	int *unroll = user;
-
-	for (i = 0; i < n_out; ++i) {
-		isl_aff *aff;
-
-		aff = isl_multi_aff_get_aff(ma, i);
-		for (j = 0; j < n_in; ++j)
-			if (isl_aff_involves_dims(aff, isl_dim_in, j, 1))
-				unroll[j] = 1;
-		isl_aff_free(aff);
-	}
-
-	isl_set_free(set);
-	isl_multi_aff_free(ma);
-	return 0;
-}
-
-/* Given an array pos mapping input dimensions to the corresponding
- * output dimension, construct the corresponding map.
- */
-static __isl_give isl_map *permutation(__isl_take isl_space *dim,
-	int *pos, int len)
-{
-	int i;
-	isl_constraint *c;
-	isl_basic_map *bmap;
-	isl_local_space *ls;
-
-	dim = isl_space_add_dims(dim, isl_dim_in, len);
-	dim = isl_space_add_dims(dim, isl_dim_out, len);
-	bmap = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < len; ++i) {
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i,
-						      -1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, pos[i],
-						      1);
-		bmap = isl_basic_map_add_constraint(bmap, c);
-	}
-	isl_local_space_free(ls);
-
-	return isl_map_from_basic_map(bmap);
-}
-
-/* Remove the private tiles from all array reference groups,
- * except for the groups of arrays that are marked force_private.
- */
-static void remove_private_tiles(struct gpu_gen *gen)
-{
-	int i, j;
-
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
-
-		if (array->force_private)
-			continue;
-
-		for (j = 0; j < array->n_group; ++j) {
-			struct gpu_array_ref_group *group = array->groups[j];
-
-			group->private_tile = free_tile(group->private_tile);
-		}
-	}
-}
-
-/* Find all loops involved in any of the index expressions for any of
- * the private accesses, move them innermost and then mark them as
- * requiring unrolling by setting gen->first_unroll.
- * The loops involved should all be parallel because of the checks
- * we performed in check_private_group_access.  Moving them innermost
- * is therefore a valid transformation.
- *
- * If any of the arrays are marked force_private, however, then
- * those loops may not be parallel with respect to the marked arrays.
- * If any of the loops would have to be moved innermost for the
- * (non forced) private accesses and if there are any force_private
- * arrays, then we revert the decision to map the selected arrays
- * to private memory.  An alternative solution would be to expand
- * the force_private arrays.
- *
- * Loops up to gen->shared_len are generated before the mapping to
- * threads is applied.  They should therefore be ignored.
- *
- * We compute the hidden equalities of the schedule first
- * since we will need them in our calls to isl_pw_multi_aff_from_map
- * and because we want to make sure that the same equalities
- * are also available to the code generator.
- */
-static __isl_give isl_union_map *interchange_for_unroll(struct gpu_gen *gen,
-	__isl_take isl_union_map *sched)
-{
-	int i, j;
-	int unroll[gen->thread_tiled_len];
-	int perm[gen->thread_tiled_len];
-	isl_space *dim;
-	isl_map *permute;
-	int len = gen->shared_len + gen->n_parallel + gen->n_block;
-
-	gen->first_unroll = -1;
-
-	sched = isl_union_map_detect_equalities(sched);
-	for (i = 0; i < gen->thread_tiled_len; ++i)
-		unroll[i] = 0;
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
-
-		for (j = 0; j < array->n_group; ++j) {
-			isl_union_map *access;
-			isl_map *acc;
-			isl_pw_multi_aff *pma;
-
-			if (!array->groups[j]->private_tile)
-				continue;
-
-			access = group_access_relation(array->groups[j], 1, 1);
-			access = isl_union_map_apply_domain(access,
-						isl_union_map_copy(sched));
-
-			acc = isl_map_from_union_map(access);
-			pma = isl_pw_multi_aff_from_map(acc);
-			isl_pw_multi_aff_foreach_piece(pma,
-							&check_unroll, unroll);
-
-			isl_pw_multi_aff_free(pma);
-		}
-	}
-
-	for (i = gen->shared_len; i < len; ++i)
-		if (unroll[i])
-			break;
-
-	if (i >= len)
-		return sched;
-
-	for (i = len; i < gen->thread_tiled_len; ++i)
-		if (unroll[i])
-			return sched;
-
-	if (gen->any_force_private) {
-		remove_private_tiles(gen);
-		return sched;
-	}
-
-	j = 0;
-	for (i = 0; i < gen->shared_len; ++i)
-		perm[i] = j++;
-	for (i = gen->shared_len; i < gen->thread_tiled_len; ++i)
-		if (!unroll[i])
-			perm[i] = j++;
-	gen->first_unroll = j - gen->shared_len;
-	for (i = gen->shared_len; i < len; ++i)
-		if (unroll[i])
-			perm[i] = j++;
-
-	dim = isl_union_map_get_space(sched);
-	permute = permutation(dim, perm, gen->thread_tiled_len);
-	sched = isl_union_map_apply_range(sched,
-					  isl_union_map_from_map(permute));
-
-	return sched;
-}
-
-/* Given a constraint
- *
- *		a(p,i) + j = g f(e)
- *
- * or -a(p,i) - j = g f(e) if sign < 0,
- * store a(p,i) in bound->shift and g (stride) in bound->stride.
- * a(p,i) is assumed to be an expression in only the parameters
- * and the input dimensions.
- */
-static void extract_stride(__isl_keep isl_constraint *c,
-	struct gpu_array_bound *bound, __isl_keep isl_val *stride, int sign)
-{
-	int i;
-	isl_val *v;
-	isl_space *space;
-	unsigned nparam;
-	unsigned nvar;
-	isl_aff *aff;
-
-	isl_val_free(bound->stride);
-	bound->stride = isl_val_copy(stride);
-
-	space = isl_constraint_get_space(c);
-	space = isl_space_domain(space);
-
-	nparam = isl_space_dim(space, isl_dim_param);
-	nvar = isl_space_dim(space, isl_dim_set);
-
-	v = isl_constraint_get_constant_val(c);
-	if (sign < 0)
-		v = isl_val_neg(v);
-	aff = isl_aff_zero_on_domain(isl_local_space_from_space(space));
-	aff = isl_aff_set_constant_val(aff, v);
-
-	for (i = 0; i < nparam; ++i) {
-		if (!isl_constraint_involves_dims(c, isl_dim_param, i, 1))
-			continue;
-		v = isl_constraint_get_coefficient_val(c, isl_dim_param, i);
-		if (sign < 0)
-			v = isl_val_neg(v);
-		aff = isl_aff_add_coefficient_val(aff, isl_dim_param, i, v);
-	}
-
-	for (i = 0; i < nvar; ++i) {
-		if (!isl_constraint_involves_dims(c, isl_dim_in, i, 1))
-			continue;
-		v = isl_constraint_get_coefficient_val(c, isl_dim_in, i);
-		if (sign < 0)
-			v = isl_val_neg(v);
-		aff = isl_aff_add_coefficient_val(aff, isl_dim_in, i, v);
-	}
-
-	bound->shift = aff;
-}
-
-/* Given an equality constraint of a map with a single output dimension j,
- * check if the constraint is of the form
- *
- *		a(p,i) + j = g f(e)
- *
- * with a(p,i) an expression in the parameters and input dimensions
- * and f(e) an expression in the existentially quantified variables.
- * If so, and if g is larger than any such g from a previously considered
- * constraint, then call extract_stride to record the stride information
- * in bound.
- */
-static int check_stride_constraint(__isl_take isl_constraint *c, void *user)
-{
-	int i;
-	isl_ctx *ctx;
-	isl_val *v;
-	unsigned n_div;
-	struct gpu_array_bound *bound = user;
-
-	ctx = isl_constraint_get_ctx(c);
-	n_div = isl_constraint_dim(c, isl_dim_div);
-	v = isl_constraint_get_coefficient_val(c, isl_dim_out, 0);
-
-	if (n_div && (isl_val_is_one(v) || isl_val_is_negone(v))) {
-		int s = isl_val_sgn(v);
-		isl_val *stride = isl_val_zero(ctx);
-
-		isl_val_free(v);
-		for (i = 0; i < n_div; ++i) {
-			v = isl_constraint_get_coefficient_val(c,
-								isl_dim_div, i);
-			stride = isl_val_gcd(stride, v);
-		}
-		if (!isl_val_is_zero(stride) &&
-		    isl_val_gt(stride, bound->stride))
-			extract_stride(c, bound, stride, s);
-
-		isl_val_free(stride);
-	} else
-		isl_val_free(v);
-
-	isl_constraint_free(c);
-	return 0;
-}
-
-/* Given contraints on an array index i, check if we can find
- * a shift a(p) and a stride g such that
- *
- *	a(p) + i = 0 mod g
- *
- * If so, record the information in bound and apply the mapping
- * i -> (i + a(p))/g to the array index in bounds and return
- * the new constraints.
- * If not, simply return the original constraints.
- *
- * If bounds is a subset of the space
- *
- *	D -> i
- *
- * then the bound recorded in bound->shift is of the form
- *
- *	D -> s(D)
- *
- * with s(D) equal to a(p) above.
- * Next, we construct a mapping of the form
- *
- *	[D -> i] -> [D -> (i + S(D))/g]
- *
- * This mapping is computed as follows.
- * We first introduce "i" in the domain through precomposition
- * with [D -> i] -> D obtaining
- *
- *	[D -> i] -> s(D)
- *
- * Adding [D -> i] -> i produces
- *
- *	[D -> i] -> i + s(D)
- *
- * and the domain product with [D -> i] -> D yields
- *
- *	[D -> i] -> [D -> i + s(D)]
- *
- * Composition with [D -> i] -> [D -> i/g] gives the desired result.
- */
-static __isl_give isl_basic_map *check_stride(struct gpu_array_bound *bound,
-	__isl_take isl_basic_map *bounds)
-{
-	isl_space *space;
-	isl_basic_map *hull;
-	isl_basic_map *shift, *id, *bmap, *scale;
-	isl_basic_set *bset;
-	isl_aff *aff;
-
-	bound->stride = NULL;
-
-	hull = isl_basic_map_affine_hull(isl_basic_map_copy(bounds));
-
-	isl_basic_map_foreach_constraint(hull, &check_stride_constraint, bound);
-
-	isl_basic_map_free(hull);
-
-	if (!bound->stride)
-		return bounds;
-
-	shift = isl_basic_map_from_aff(isl_aff_copy(bound->shift));
-	space = isl_basic_map_get_space(bounds);
-	bmap = isl_basic_map_domain_map(isl_basic_map_universe(space));
-	shift = isl_basic_map_apply_range(bmap, shift);
-	space = isl_basic_map_get_space(bounds);
-	id = isl_basic_map_range_map(isl_basic_map_universe(space));
-	shift = isl_basic_map_sum(id, shift);
-	space = isl_basic_map_get_space(bounds);
-	id = isl_basic_map_domain_map(isl_basic_map_universe(space));
-	shift = isl_basic_map_range_product(id, shift);
-
-	space = isl_space_domain(isl_basic_map_get_space(bounds));
-	id = isl_basic_map_identity(isl_space_map_from_set(space));
-	space = isl_space_range(isl_basic_map_get_space(bounds));
-	aff = isl_aff_zero_on_domain(isl_local_space_from_space(space));
-	aff = isl_aff_add_coefficient_si(aff, isl_dim_in, 0, 1);
-	aff = isl_aff_scale_down_val(aff, isl_val_copy(bound->stride));
-	scale = isl_basic_map_from_aff(aff);
-	scale = isl_basic_map_product(id, scale);
-
-	bmap = isl_basic_map_apply_range(shift, scale);
-	bset = isl_basic_set_apply(isl_basic_map_wrap(bounds), bmap);
-	bounds = isl_basic_set_unwrap(bset);
-
-	return bounds;
-}
-
-/* Data used in compute_array_dim_size and compute_size_in_direction.
- *
- * pos is the position of the variable representing the array index,
- * i.e., the variable for which want to compute the size.  This variable
- * is also the last variable in the set.
- */
-struct gpu_size_info {
-	isl_basic_set *bset;
-	struct gpu_array_bound *bound;
-	int pos;
-};
-
-/* Given a constraint from the basic set describing the bounds on
- * an array index, check if it is a lower bound, say m i >= b(x), and,
- * if so, check whether the expression "i - ceil(b(x)/m) + 1" has a constant
- * upper bound.  If so, and if this bound is smaller than any bound
- * derived from earlier constraints, set the size to this bound on
- * the expression and the lower bound to ceil(b(x)/m).
- */
-static int compute_size_in_direction(__isl_take isl_constraint *c, void *user)
-{
-	struct gpu_size_info *size = user;
-	unsigned nparam;
-	unsigned n_div;
-	isl_val *v;
-	isl_aff *aff;
-	isl_aff *lb;
-
-	nparam = isl_basic_set_dim(size->bset, isl_dim_param);
-	n_div = isl_constraint_dim(c, isl_dim_div);
-
-	if (isl_constraint_involves_dims(c, isl_dim_div, 0, n_div) ||
-	    !isl_constraint_is_lower_bound(c, isl_dim_set, size->pos)) {
-		isl_constraint_free(c);
-		return 0;
-	}
-
-	aff = isl_constraint_get_bound(c, isl_dim_set, size->pos);
-	aff = isl_aff_ceil(aff);
-
-	lb = isl_aff_copy(aff);
-
-	aff = isl_aff_neg(aff);
-	aff = isl_aff_add_coefficient_si(aff, isl_dim_in, size->pos, 1);
-
-	v = isl_basic_set_max_val(size->bset, aff);
-	isl_aff_free(aff);
-
-	if (isl_val_is_int(v)) {
-		v = isl_val_add_ui(v, 1);
-		if (!size->bound->size || isl_val_lt(v, size->bound->size)) {
-			isl_val_free(size->bound->size);
-			size->bound->size = isl_val_copy(v);
-			lb = isl_aff_drop_dims(lb, isl_dim_in, size->pos, 1);
-			isl_aff_free(size->bound->lb);
-			size->bound->lb = isl_aff_copy(lb);
-		}
-	}
-	isl_val_free(v);
-	isl_aff_free(lb);
-
-	isl_constraint_free(c);
-
-	return 0;
-}
-
-/* Given a basic map "bounds" that maps parameters and input dimensions
- * to a single output dimension, look for an expression in the parameters
- * and input dimensions such that the range of the output dimension shifted
- * by this expression is a constant.
- *
- * In particular, we currently only consider lower bounds on the output
- * dimension as candidate expressions.
- */
-static int compute_array_dim_size(struct gpu_array_bound *bound,
-	__isl_take isl_basic_map *bounds)
-{
-	struct gpu_size_info size;
-
-	bounds = isl_basic_map_detect_equalities(bounds);
-	bounds = check_stride(bound, bounds);
-
-	bound->size = NULL;
-	bound->lb = NULL;
-
-	size.bound = bound;
-	size.pos = isl_basic_map_dim(bounds, isl_dim_in);
-	size.bset = isl_basic_map_wrap(bounds);
-	size.bset = isl_basic_set_flatten(size.bset);
-	size.bset = isl_set_simple_hull(isl_basic_set_compute_divs(size.bset));
-	isl_basic_set_foreach_constraint(size.bset, &compute_size_in_direction,
-					&size);
-	isl_basic_set_free(size.bset);
-
-	return bound->size ? 0 : -1;
-}
-
-/* Check if we can find a memory tile for the given array
- * based on the given accesses, and if so, put the results in "tile".
- *
- * We project the accesses on each index in turn and look for a parametric
- * offset such that the size is constant.
- */
-static int can_tile(__isl_keep isl_map *access, struct gpu_array_tile *tile)
-{
-	int i;
-
-	for (i = 0; i < tile->n; ++i) {
-		isl_map *access_i;
-		isl_basic_map *hull;
-
-		access_i = isl_map_copy(access);
-		access_i = isl_map_project_out(access_i, isl_dim_out, 0, i);
-		access_i = isl_map_project_out(access_i, isl_dim_out,
-					    1, tile->n - (i + 1));
-		access_i = isl_map_compute_divs(access_i);
-		hull = isl_map_simple_hull(access_i);
-		if (compute_array_dim_size(&tile->bound[i], hull) < 0)
-			return 0;
-	}
-
-	return 1;
-}
-
-/* Construct a map with input the shared tile loops and the loops that
- * will be wrapped around the threads that relates these later loops
- * to the thread indices and then projects them out.
- */
-static __isl_give isl_map *compute_privatization(struct gpu_gen *gen)
-{
-	isl_map *priv;
-	isl_map *tiling;
-	isl_map *proj;
-	isl_set *par;
-	isl_space *dim;
-
-	dim = isl_union_map_get_space(gen->shared_sched);
-
-	if (gen->options->wrap)
-		tiling = wrap(isl_space_copy(dim), gen->shared_len + gen->n_block,
-				gen->shared_len, gen->n_block, gen->block_dim);
-	else
-		tiling = tile(isl_space_copy(dim), gen->shared_len + gen->n_block,
-				gen->shared_len, gen->n_block, gen->block_dim);
-
-	priv = tiling;
-
-	par = parametrization(dim, gen->shared_len + 2 * gen->n_block,
-		gen->tile_first + gen->tile_len + gen->n_grid + gen->n_block,
-		gen->kernel->thread_ids);
-
-	priv = isl_map_align_params(priv, isl_set_get_space(par));
-	priv = isl_map_intersect_range(priv, par);
-
-	dim = isl_map_get_space(priv);
-	dim = isl_space_drop_dims(dim, isl_dim_in, 0, isl_space_dim(dim, isl_dim_in));
-	dim = isl_space_drop_dims(dim, isl_dim_out, 0, isl_space_dim(dim, isl_dim_out));
-	proj = projection(dim, gen->shared_len + 2 * gen->n_block,
-			  gen->shared_len);
-
-	priv = isl_map_apply_range(priv, proj);
-
-	return priv;
-}
-
-/* Construct a map from domain_dim to domain_dim that increments
- * the dimension at position "pos" and leaves all other dimensions
- * constant.
- */
-static __isl_give isl_map *next(__isl_take isl_space *domain_dim, int pos)
-{
-	int i;
-	int len = isl_space_dim(domain_dim, isl_dim_set);
-	isl_space *dim;
-	isl_basic_map *next;
-	isl_local_space *ls;
-
-	dim = isl_space_map_from_set(domain_dim);
-	next = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
-
-	for (i = 0; i < len; ++i) {
-		isl_constraint *c;
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i, 1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, i, -1);
-		if (i == pos)
-			c = isl_constraint_set_constant_si(c, 1);
-		next = isl_basic_map_add_constraint(next, c);
-	}
-
-	isl_local_space_free(ls);
-
-	return isl_map_from_basic_map(next);
-}
-
-/* Check if the given access is coalesced.
- * That is, check whether incrementing the dimension that will get
- * wrapped over the last thread index results in incrementing
- * the last array index.
- *
- * This function is only called for access relations without reuse and
- * kernels with at least one block dimension.
- */
-static int access_is_coalesced(struct gpu_gen *gen,
-	__isl_keep isl_union_map *access)
-{
-	isl_space *dim;
-	isl_map *access_map;
-	isl_map *next_thread_x;
-	isl_map *next_element;
-	isl_map *map;
-	int coalesced;
-
-	access = isl_union_map_copy(access);
-	access = isl_union_map_apply_domain(access,
-				isl_union_map_copy(gen->tiled_sched));
-	access_map = isl_map_from_union_map(access);
-
-	dim = isl_map_get_space(access_map);
-	dim = isl_space_domain(dim);
-	next_thread_x = next(dim, gen->shared_len + gen->n_block - 1);
-
-	dim = isl_map_get_space(access_map);
-	dim = isl_space_range(dim);
-	next_element = next(dim, isl_space_dim(dim, isl_dim_set) - 1);
-
-	map = isl_map_apply_domain(next_thread_x, isl_map_copy(access_map));
-	map = isl_map_apply_range(map, access_map);
-
-	coalesced = isl_map_is_subset(map, next_element);
-
-	isl_map_free(next_element);
-	isl_map_free(map);
-
-	return coalesced;
-}
-
-/* Given an access relation in terms of the first gen->shared_len + gen->n_block
- * dimensions of the computed schedule, check if it is bijective for
- * fixed values of the first gen->shared_len dimensions.
- * We perform this check by equating these dimensions to parameters.
- */
-static int access_is_bijective(struct gpu_gen *gen, __isl_keep isl_map *access)
-{
-	int res;
-	isl_set *par;
-	isl_space *space;
-	isl_id_list *ids;
-
-	access = isl_map_copy(access);
-	space = isl_space_params(isl_map_get_space(access));
-	ids = ppcg_scop_generate_names(gen->prog->scop, gen->shared_len, "s");
-	par = parametrization(space, gen->shared_len + gen->n_block, 0, ids);
-	isl_id_list_free(ids);
-	access = isl_map_intersect_domain(access, par);
-	res = isl_map_is_bijective(access);
-	isl_map_free(access);
-
-	return res;
-}
-
-/* Look for the last shared tile loop that affects the offset of "tile"
- * and return the result.
- * If there is no such loop, then return the index of the loop
- * before the first shared tile loop, in particular gen->tile_first - 1.
- */
-static int compute_tile_last_shared(struct gpu_gen *gen,
-	struct gpu_array_tile *tile)
-{
-	int i, j;
-
-	for (j = gen->shared_len - 1; j >= gen->tile_first; --j) {
-		for (i = 0; i < tile->n; ++i) {
-			isl_aff *lb;
-			isl_aff *shift;
-
-			lb = tile->bound[i].lb;
-			if (isl_aff_involves_dims(lb, isl_dim_in, j, 1))
-				break;
-
-			shift = tile->bound[i].shift;
-			if (!shift)
-				continue;
-			if (isl_aff_involves_dims(shift, isl_dim_in, j, 1))
-				break;
-		}
-		if (i < tile->n)
-			break;
-	}
-
-	return j;
-}
-
-/* Look for the last shared tile loop that affects the offset of the
- * shared or private tile and store the result in group->last_shared.
- * If there is no such loop, then group->last_shared is set to a value
- * before the first shared tile loop, in particular gen->tile_first - 1.
- * If there is no tile defined on the array reference group,
- * then set group->last_shared to gen->shared_len - 1.
- */
-static void set_last_shared(struct gpu_gen *gen,
-	struct gpu_array_ref_group *group)
-{
-	struct gpu_array_tile *tile;
-
-	group->last_shared = gen->shared_len - 1;
-
-	tile = group->private_tile;
-	if (!tile)
-		tile = group->shared_tile;
-	if (!tile)
-		return;
-
-	group->last_shared = compute_tile_last_shared(gen, tile);
-}
-
-/* Compute the size of the tile specified by "tile"
- * in number of elements and return the result.
- */
-static __isl_give isl_val *tile_size(isl_ctx *ctx, struct gpu_array_tile *tile)
-{
-	int i;
-	isl_val *size;
-
-	size = isl_val_one(ctx);
-
-	for (i = 0; i < tile->n; ++i)
-		size = isl_val_mul(size, isl_val_copy(tile->bound[i].size));
-
-	return size;
+	return isl_pw_multi_aff_pullback_pw_multi_aff(pma, iterator_map);
 }
 
 /* If max_shared_memory is not set to infinity (-1), then make
  * sure that the total amount of shared memory required by the
- * array reference groups mapped to shared memory is no larger
- * than this maximum.
+ * array reference groups mapped to shared memory by "kernel"
+ * is no larger than this maximum.
  *
  * We apply a greedy approach and discard (keep in global memory)
  * those groups that would result in a total memory size that
@@ -2333,30 +897,31 @@ static __isl_give isl_val *tile_size(isl_ctx *ctx, struct gpu_array_tile *tile)
  * affect the decision on whether to place a reference group
  * in private, shared or global memory.
  */
-static void check_shared_memory_bound(struct gpu_gen *gen)
+static void check_shared_memory_bound(struct ppcg_kernel *kernel)
 {
 	int i, j;
 	isl_val *left, *size;
 
-	if (gen->options->max_shared_memory < 0)
+	if (kernel->options->max_shared_memory < 0)
 		return;
 
-	left = isl_val_int_from_si(gen->ctx, gen->options->max_shared_memory);
+	left = isl_val_int_from_si(kernel->ctx,
+				    kernel->options->max_shared_memory);
 
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *local = &kernel->array[i];
 
-		for (j = 0; j < array->n_group; ++j) {
+		for (j = 0; j < local->n_group; ++j) {
 			struct gpu_array_ref_group *group;
 
-			group = array->groups[j];
+			group = local->groups[j];
 			if (group->private_tile)
 				continue;
 			if (!group->shared_tile)
 				continue;
 
-			size = tile_size(gen->ctx, group->shared_tile);
-			size = isl_val_mul_ui(size, array->size);
+			size = gpu_array_tile_size(group->shared_tile);
+			size = isl_val_mul_ui(size, local->array->size);
 
 			if (isl_val_le(size, left)) {
 				left = isl_val_sub(left, size);
@@ -2364,853 +929,25 @@ static void check_shared_memory_bound(struct gpu_gen *gen)
 			}
 			isl_val_free(size);
 
-			group->shared_tile = free_tile(group->shared_tile);
+			group->shared_tile =
+					gpu_array_tile_free(group->shared_tile);
 		}
 	}
 
 	isl_val_free(left);
 }
 
-/* Given a description of an array tile "tile" and the "space"
- *
- *	{ D -> A }
- *
- * where D represents the first shared_len schedule dimensions
- * and A represents the array, construct an isl_multi_aff
- *
- *	{ [D[i] -> A[a]] -> A'[a'] }
- *
- * with A' a scaled down copy of A according to the shifts and strides
- * in "tile".  In particular,
- *
- *	a' = (a + shift(i))/stride
- *
- * "insert_array" represents
- *
- *	{ [D -> A] -> D }
- *
- * and is used to insert A into the domain of functions that only
- * reference D.
+/* Compute a tiling for all the array reference groups in "kernel".
  */
-static __isl_give isl_multi_aff *strided_tile(
-	struct gpu_array_tile *tile, __isl_keep isl_space *space,
-	__isl_keep isl_multi_aff *insert_array)
-{
-	int i;
-	isl_ctx *ctx;
-	isl_multi_aff *shift;
-	isl_multi_val *stride;
-	isl_space *space2;
-	isl_local_space *ls;
-	isl_multi_aff *tiling;
-
-	ctx = isl_space_get_ctx(space);
-	space2 = isl_space_domain(isl_space_copy(space));
-	ls = isl_local_space_from_space(space2);
-	space2 = isl_space_range(isl_space_copy(space));
-	stride = isl_multi_val_zero(space2);
-	shift = isl_multi_aff_zero(isl_space_copy(space));
-
-	for (i = 0; i < tile->n; ++i) {
-		struct gpu_array_bound *bound = &tile->bound[i];
-		isl_val *stride_i;
-		isl_aff *shift_i;
-
-		if (tile->bound[i].shift) {
-			stride_i = isl_val_copy(bound->stride);
-			shift_i = isl_aff_copy(bound->shift);
-		} else {
-			stride_i = isl_val_one(ctx);
-			shift_i = isl_aff_zero_on_domain(
-					isl_local_space_copy(ls));
-		}
-
-		stride = isl_multi_val_set_val(stride, i, stride_i);
-		shift = isl_multi_aff_set_aff(shift, i, shift_i);
-	}
-	isl_local_space_free(ls);
-
-	shift = isl_multi_aff_pullback_multi_aff(shift,
-				    isl_multi_aff_copy(insert_array));
-
-	tiling = isl_multi_aff_range_map(isl_space_copy(space));
-	tiling = isl_multi_aff_add(tiling, shift);
-	tiling = isl_multi_aff_scale_down_multi_val(tiling, stride);
-
-	return tiling;
-}
-
-/* Compute a tiling for the array reference group "group".
- *
- * The tiling is of the form
- *
- *	{ [D[i] -> A[a]] -> T[t] }
- *
- * where D represents the first shared_len schedule dimensions,
- * A represents the global array and T represents the shared or
- * private memory tile.  The name of T is the name of the local
- * array.
- *
- * If there is any stride in the accesses, then the mapping is
- *
- *	t = (a + shift(i))/stride - lb(i)
- *
- * otherwise, it is simply
- *
- *	t = a - lb(i)
- */
-static void compute_group_tiling(struct gpu_array_ref_group *group)
-{
-	int i;
-	struct gpu_array_tile *tile;
-	struct gpu_array_info *array = group->array;
-	isl_space *space;
-	isl_multi_aff *tiling, *lb, *insert_array;
-	isl_printer *p;
-	char *local_name;
-
-	tile = group->private_tile;
-	if (!tile)
-		tile = group->shared_tile;
-	if (!tile)
-		return;
-
-	space = isl_map_get_space(group->access);
-	insert_array = isl_multi_aff_domain_map(isl_space_copy(space));
-
-	for (i = 0; i < tile->n; ++i)
-		if (tile->bound[i].shift)
-			break;
-
-	if (i < tile->n)
-		tiling = strided_tile(tile, space, insert_array);
-	else
-		tiling = isl_multi_aff_range_map(isl_space_copy(space));
-
-	lb = isl_multi_aff_zero(space);
-	for (i = 0; i < tile->n; ++i) {
-		isl_aff *lb_i = isl_aff_copy(tile->bound[i].lb);
-		lb = isl_multi_aff_set_aff(lb, i, lb_i);
-	}
-	lb = isl_multi_aff_pullback_multi_aff(lb, insert_array);
-
-	tiling = isl_multi_aff_sub(tiling, lb);
-
-	p = isl_printer_to_str(isl_multi_aff_get_ctx(tiling));
-	p = print_array_name(p, group);
-	local_name = isl_printer_get_str(p);
-	isl_printer_free(p);
-	tiling = isl_multi_aff_set_tuple_name(tiling, isl_dim_out, local_name);
-	free(local_name);
-
-	tile->tiling = tiling;
-}
-
-/* Compute a tiling for all the array reference groups.
- */
-static void compute_group_tilings(struct gpu_gen *gen)
+static void compute_group_tilings(struct ppcg_kernel *kernel)
 {
 	int i, j;
 
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
 
 		for (j = 0; j < array->n_group; ++j)
-			compute_group_tiling(array->groups[j]);
-	}
-}
-
-/* Fill up the groups array with singleton groups, i.e., one group
- * per reference, initializing the array, access, write, n_ref and refs fields.
- * In particular the access field is initialized to the scheduled
- * access relation of the array reference.
- *
- * Return the number of elements initialized, i.e., the number of
- * active references in the current kernel.
- */
-static int populate_array_references(struct gpu_array_info *array,
-	__isl_keep isl_union_map *sched, struct gpu_array_ref_group **groups)
-{
-	int i;
-	int n;
-	isl_ctx *ctx = isl_union_map_get_ctx(sched);
-
-	n = 0;
-	for (i = 0; i < array->n_ref; ++i) {
-		isl_union_map *umap;
-		isl_map *map;
-		struct gpu_array_ref_group *group;
-		struct gpu_stmt_access *access = array->refs[i];
-
-		map = isl_map_copy(access->access);
-		umap = isl_union_map_from_map(map);
-		umap = isl_union_map_apply_domain(umap,
-				isl_union_map_copy(sched));
-
-		if (isl_union_map_is_empty(umap)) {
-			isl_union_map_free(umap);
-			continue;
-		}
-
-		map = isl_map_from_union_map(umap);
-		map = isl_map_detect_equalities(map);
-
-		group = isl_calloc_type(ctx, struct gpu_array_ref_group);
-		assert(group);
-		group->array = array;
-		group->access = map;
-		group->write = access->write;
-		group->exact_write = access->exact_write;
-		group->slice = access->n_index < array->n_index;
-		group->refs = &array->refs[i];
-		group->n_ref = 1;
-
-		groups[n++] = group;
-	}
-
-	return n;
-}
-
-/* If group->n_ref == 1, then group->refs was set by
- * populate_array_references to point directly into
- * group->array->refs and should not be freed.
- * If group->n_ref > 1, then group->refs was set by join_groups
- * to point to a newly allocated array.
- */
-static void free_array_ref_group(struct gpu_array_ref_group *group)
-{
-	if (!group)
-		return;
-	free_tile(group->shared_tile);
-	free_tile(group->private_tile);
-	isl_map_free(group->access);
-	if (group->n_ref > 1)
-		free(group->refs);
-	free(group);
-}
-
-/* Given a map where the input dimensions represent the tile loops,
- * eliminate the innermost of those that have a fixed value
- * until we reach one that does not (obviously) have a fixed value.
- */
-static __isl_give isl_map *eliminate_fixed_inner_loops(
-	__isl_take isl_map *access)
-{
-	int i, n;
-
-	n = isl_map_dim(access, isl_dim_in);
-
-	for (i = n - 1; i >= 0; --i) {
-		if (!map_plain_is_fixed(access, isl_dim_in, i))
-			break;
-		access = isl_map_eliminate(access, isl_dim_in, i, 1);
-	}
-	return access;
-}
-
-/* Check if the access relations of group1 and group2 overlap within
- * the innermost loop.  In particular, ignore any inner dimension
- * with a fixed value.
- * The copying to and from shared memory will be performed within
- * the innermost actual loop so we are only allowed to consider
- * the dimensions up to that innermost loop while checking whether
- * two access relations overlap.
- */
-static int accesses_overlap(struct gpu_array_ref_group *group1,
-	struct gpu_array_ref_group *group2)
-{
-	int empty;
-	isl_map *access1, *access2;
-
-	access1 = isl_map_copy(group1->access);
-	access1 = eliminate_fixed_inner_loops(access1);
-	access2 = isl_map_copy(group2->access);
-	access2 = eliminate_fixed_inner_loops(access2);
-	access1 = isl_map_intersect(access1, access2);
-	empty = isl_map_is_empty(access1);
-	isl_map_free(access1);
-
-	return !empty;
-}
-
-/* Combine the given two groups into a single group, containing
- * the references of both groups.
- */
-static struct gpu_array_ref_group *join_groups(
-	struct gpu_array_ref_group *group1,
-	struct gpu_array_ref_group *group2)
-{
-	int i;
-	isl_ctx *ctx;
-	struct gpu_array_ref_group *group;
-
-	ctx = isl_map_get_ctx(group1->access);
-	group = isl_calloc_type(ctx, struct gpu_array_ref_group);
-	assert(group);
-	group->array = group1->array;
-	group->access = isl_map_union(isl_map_copy(group1->access),
-					isl_map_copy(group2->access));
-	group->write = group1->write || group2->write;
-	group->exact_write = group1->exact_write && group2->exact_write;
-	group->slice = group1->slice || group2->slice;
-	group->n_ref = group1->n_ref + group2->n_ref;
-	group->refs = isl_alloc_array(ctx, struct gpu_stmt_access *,
-					group->n_ref);
-	assert(group->refs);
-	for (i = 0; i < group1->n_ref; ++i)
-		group->refs[i] = group1->refs[i];
-	for (i = 0; i < group2->n_ref; ++i)
-		group->refs[group1->n_ref + i] = group2->refs[i];
-
-	return group;
-}
-
-/* Combine the given two groups into a single group and free
- * the original two groups.
- */
-static struct gpu_array_ref_group *join_groups_and_free(
-	struct gpu_array_ref_group *group1,
-	struct gpu_array_ref_group *group2)
-{
-	struct gpu_array_ref_group *group;
-
-	group = join_groups(group1, group2);
-	free_array_ref_group(group1);
-	free_array_ref_group(group2);
-	return group;
-}
-
-/* Report that the array reference group with the given access relation
- * is not mapped to shared memory in the given kernel because
- * it does not exhibit any reuse and is considered to be coalesced.
- */
-static void report_no_reuse_and_coalesced(struct ppcg_kernel *kernel,
-	__isl_keep isl_union_map *access)
-{
-	isl_ctx *ctx;
-	isl_printer *p;
-
-	ctx = isl_union_map_get_ctx(access);
-	p = isl_printer_to_file(ctx, stdout);
-	p = isl_printer_print_str(p, "Array reference group ");
-	p = isl_printer_print_union_map(p, access);
-	p = isl_printer_print_str(p,
-	    " not considered for mapping to shared memory in kernel");
-	p = isl_printer_print_int(p, kernel->id);
-	p = isl_printer_print_str(p,
-	    " because it exhibits no reuse and is considered to be coalesced");
-	p = isl_printer_end_line(p);
-	isl_printer_free(p);
-}
-
-/* Compute the private and/or shared memory tiles for the array
- * reference group "group" of array "array".
- * Return 0 on success and -1 on error.
- *
- * If the array is a read-only scalar or if the user requested
- * not to use shared or private memory, then we do not need to do anything.
- *
- * If any reference in the reference group accesses more than one element,
- * then we would have to make sure that the layout in shared memory
- * is the same as that in global memory.  Since we do not handle this yet
- * (and it may not even be possible), we refuse to map to private or
- * shared memory in such cases.
- *
- * If the array group involves any may writes (that are not must writes),
- * then we would have to make sure that we load the data into shared/private
- * memory first in case the data is not written by the kernel
- * (but still written back out to global memory).
- * Since we don't have any such mechanism at the moment, we don't
- * compute shared/private tiles for groups involving may writes.
- *
- * We only try to compute a shared memory tile if there is any reuse
- * or if the access is not coalesced.
- *
- * For computing a private memory tile, we also require that there is
- * some reuse.  Moreover, we require that the access is private
- * to the thread.  That is, we check that any given array element
- * is only accessed by a single thread.
- * We compute an access relation that maps the shared tile loop iterators
- * and the shared point loop iterators that will be wrapped over the
- * threads to the array elements.
- * We actually check that those iterators that will be wrapped
- * partition the array space.  This check is stricter than necessary
- * since several iterations may be mapped onto the same thread
- * and then they could be allowed to access the same memory elements,
- * but our check does not allow this situation.
- *
- * We also check that the index expression only depends on parallel
- * loops.  That way, we can move those loops innermost and unroll them.
- * Again, we use a test that is stricter than necessary.
- * We actually check whether the index expression only depends
- * on the iterators that are wrapped over the threads.
- * These are necessarily parallel, but there may be more parallel loops.
- *
- * Combining the injectivity of the first test with the single-valuedness
- * of the second test, we simply test for bijectivity.
- *
- * If the array is marked force_private, then we bypass all checks
- * and assume we can (and should) use registers.
- *
- * If it turns out we can (or have to) use registers, we compute
- * the private memory tile size using can_tile, after introducing a dependence
- * on the thread indices.
- */
-static int compute_group_bounds_core(struct gpu_gen *gen,
-	struct gpu_array_ref_group *group)
-{
-	isl_ctx *ctx = isl_space_get_ctx(group->array->space);
-	isl_union_map *access;
-	int n_index = group->array->n_index;
-	int no_reuse, coalesced;
-	isl_map *acc;
-	int force_private = group->array->force_private;
-	int use_shared = gen->options->use_shared_memory && gen->n_block > 0;
-	int use_private = force_private || gen->options->use_private_memory;
-
-	if (!use_shared && !use_private)
-		return 0;
-	if (gpu_array_is_read_only_scalar(group->array))
-		return 0;
-	if (!force_private && !group->exact_write)
-		return 0;
-	if (group->slice)
-		return 0;
-
-	access = group_access_relation(group, 1, 1);
-	no_reuse = isl_union_map_is_injective(access);
-	if (use_shared && no_reuse)
-		coalesced = access_is_coalesced(gen, access);
-
-	if (gen->options->debug->verbose && use_shared && no_reuse && coalesced)
-		report_no_reuse_and_coalesced(gen->kernel, access);
-
-	if (use_shared && (!no_reuse || !coalesced)) {
-		group->shared_tile = create_tile(ctx, group->array->n_index);
-		if (!can_tile(group->access, group->shared_tile))
-			group->shared_tile = free_tile(group->shared_tile);
-	}
-
-	if (!force_private && (!use_private || no_reuse)) {
-		isl_union_map_free(access);
-		return 0;
-	}
-
-	access = isl_union_map_apply_domain(access,
-					isl_union_map_copy(gen->shared_sched));
-
-	acc = isl_map_from_union_map(access);
-
-	if (!force_private && !access_is_bijective(gen, acc)) {
-		isl_map_free(acc);
-		return 0;
-	}
-
-	group->private_tile = create_tile(gen->ctx, n_index);
-	acc = isl_map_apply_domain(acc, isl_map_copy(gen->privatization));
-	if (!can_tile(acc, group->private_tile))
-		group->private_tile = free_tile(group->private_tile);
-
-	isl_map_free(acc);
-
-	if (force_private && !group->private_tile)
-		isl_die(ctx, isl_error_internal,
-			"unable to map array reference group to registers",
-			return -1);
-
-	return 0;
-}
-
-/* Compute the private and/or shared memory tiles for the array
- * reference group "group" of array "array" and set last_shared.
- * Return 0 on success and -1 on error.
- */
-static int compute_group_bounds(struct gpu_gen *gen,
-	struct gpu_array_ref_group *group)
-{
-	if (compute_group_bounds_core(gen, group) < 0)
-		return -1;
-	set_last_shared(gen, group);
-
-	return 0;
-}
-
-/* If two groups have overlapping access relations (as determined by
- * the "overlap" function) and if one of them involves a write,
- * then merge the two groups into one.
- * If "compute_bounds" is set, then call compute_group_bounds
- * on the merged groups.
- *
- * Return the updated number of groups.
- * Return -1 on error.
- */
-static int group_writes(struct gpu_gen *gen,
-	int n, struct gpu_array_ref_group **groups,
-	int (*overlap)(struct gpu_array_ref_group *group1,
-		struct gpu_array_ref_group *group2), int compute_bounds)
-{
-	int i, j;
-
-	for (i = 0; i < n; ++i) {
-		for (j = n - 1; j > i; --j) {
-			if (!groups[i]->write && !groups[j]->write)
-				continue;
-
-			if (!overlap(groups[i], groups[j]))
-				continue;
-
-			groups[i] = join_groups_and_free(groups[i], groups[j]);
-			if (j != n - 1)
-				groups[j] = groups[n - 1];
-			groups[n - 1] = NULL;
-			n--;
-
-			if (compute_bounds &&
-			    compute_group_bounds(gen, groups[i]) < 0)
-				return -1;
-		}
-	}
-
-	return n;
-}
-
-/* If two groups have overlapping access relations (within the innermost
- * loop) and if one of them involves a write, then merge the two groups
- * into one.
- *
- * Return the updated number of groups.
- */
-static int group_overlapping_writes(struct gpu_gen *gen,
-	int n, struct gpu_array_ref_group **groups)
-{
-	return group_writes(gen, n, groups, &accesses_overlap, 0);
-}
-
-/* Check if the access relations of group1 and group2 overlap within
- * the outermost min(group1->last_shared, group2->last_shared) loops.
- */
-static int last_shared_accesses_overlap(struct gpu_array_ref_group *group1,
-	struct gpu_array_ref_group *group2)
-{
-	int last_shared;
-	int dim;
-	int empty;
-	isl_map *map_i, *map_j, *map;
-
-	last_shared = group1->last_shared;
-	if (group2->last_shared < last_shared)
-		last_shared = group2->last_shared;
-	map_i = isl_map_copy(group1->access);
-	dim = isl_map_dim(map_i, isl_dim_in);
-	map_i = isl_map_eliminate(map_i, isl_dim_in,
-				last_shared + 1, dim - (last_shared + 1));
-	map_j = isl_map_copy(group2->access);
-	map_j = isl_map_eliminate(map_j, isl_dim_in,
-				last_shared + 1, dim - (last_shared + 1));
-	map = isl_map_intersect(map_i, map_j);
-	empty = isl_map_is_empty(map);
-	isl_map_free(map);
-
-	return !empty;
-}
-
-/* If two groups have overlapping access relations (within the outer
- * last_shared loops) and if one of them involves a write,
- * then merge the two groups into one.
- *
- * Return the updated number of groups.
- */
-static int group_last_shared_overlapping_writes(struct gpu_gen *gen, int n,
-	struct gpu_array_ref_group **groups)
-{
-	return group_writes(gen, n, groups, &last_shared_accesses_overlap, 1);
-}
-
-/* Is the size of the tile specified by "tile" smaller than the sum of
- * the sizes of the tiles specified by "tile1" and "tile2"?
- */
-static int smaller_tile(isl_ctx *ctx, struct gpu_array_tile *tile,
-	struct gpu_array_tile *tile1, struct gpu_array_tile *tile2)
-{
-	int smaller;
-	isl_val *size, *size1, *size2;
-
-	size = tile_size(ctx, tile);
-	size1 = tile_size(ctx, tile1);
-	size2 = tile_size(ctx, tile2);
-
-	size = isl_val_sub(size, size1);
-	size = isl_val_sub(size, size2);
-	smaller = isl_val_is_neg(size);
-
-	isl_val_free(size);
-
-	return smaller;
-}
-
-/* Given an initial grouping of array references and shared memory tiles
- * for each group that allows for a shared memory tile, merge two groups
- * if both have a shared memory tile, the merged group also has
- * a shared memory tile and the size of the tile for the merge group
- * is smaller than the sum of the tile sizes of the individual groups.
- *
- * If merging two groups decreases the "last_shared" dimension of
- * one or both of the two groups, then we need to check for overlapping
- * writes again.
- *
- * Return the number of groups after merging.
- * Return -1 on error.
- */
-static int group_common_shared_memory_tile(struct gpu_gen *gen,
-	struct gpu_array_info *array, int n,
-	struct gpu_array_ref_group **groups)
-{
-	int i, j;
-	int recompute_overlap = 0;
-	isl_ctx *ctx = isl_space_get_ctx(array->space);
-
-	for (i = 0; i < n; ++i) {
-		if (!groups[i]->shared_tile)
-			continue;
-		for (j = n - 1; j > i; --j) {
-			isl_map *map;
-			int empty;
-			struct gpu_array_ref_group *group;
-
-			if (!groups[j]->shared_tile)
-				continue;
-
-			map = isl_map_intersect(isl_map_copy(groups[i]->access),
-					    isl_map_copy(groups[j]->access));
-			empty = isl_map_is_empty(map);
-			isl_map_free(map);
-
-			if (empty)
-				continue;
-
-			group = join_groups(groups[i], groups[j]);
-			if (compute_group_bounds(gen, group) < 0) {
-				free_array_ref_group(group);
-				return -1;
-			}
-			if (!group->shared_tile ||
-			    !smaller_tile(ctx, group->shared_tile,
-					groups[i]->shared_tile,
-					groups[j]->shared_tile)) {
-				free_array_ref_group(group);
-				continue;
-			}
-
-			if (group->last_shared < groups[i]->last_shared ||
-			    group->last_shared < groups[j]->last_shared)
-				recompute_overlap = 1;
-			free_array_ref_group(groups[i]);
-			free_array_ref_group(groups[j]);
-			groups[i] = group;
-			if (j != n - 1)
-				groups[j] = groups[n - 1];
-			n--;
-		}
-	}
-
-	if (recompute_overlap)
-		n = group_last_shared_overlapping_writes(gen, n, groups);
-	return n;
-}
-
-/* Set array->n_group and array->groups to n and groups.
- *
- * Additionally, set the "nr" field of each group
- * and the "group" field of each reference in each group.
- */
-static void set_array_groups(struct gpu_array_info *array,
-	int n, struct gpu_array_ref_group **groups)
-{
-	int i, j;
-
-	array->n_group = n;
-	array->groups = groups;
-
-	for (i = 0; i < n; ++i) {
-		groups[i]->nr = i;
-
-		for (j = 0; j < groups[i]->n_ref; ++j)
-			groups[i]->refs[j]->group = i;
-	}
-}
-
-/* Group array references that should be considered together when
- * deciding whether to access them from private, shared or global memory.
- * Return -1 on error.
- *
- * In particular, if two array references overlap and if one of them
- * is a write, then the two references are grouped together.
- * We first perform an initial grouping based only on the access relation.
- * After computing shared and private memory tiles, we check for
- * overlapping writes again, but this time taking into account
- * the "last_shared" property.
- *
- * Furthermore, if two groups admit a shared memory tile and if the
- * combination of the two also admits a shared memory tile, we merge
- * the two groups.
- *
- * If the array contains structures, then there is no need to compute
- * reference groups since we do not map such arrays to private or shared
- * memory.
- */
-static int group_array_references(struct gpu_gen *gen,
-	struct gpu_array_info *array, __isl_keep isl_union_map *sched)
-{
-	int i;
-	int n;
-	isl_ctx *ctx = isl_union_map_get_ctx(sched);
-	struct gpu_array_ref_group **groups;
-
-	if (array->has_compound_element)
-		return 0;
-
-	groups = isl_calloc_array(ctx, struct gpu_array_ref_group *,
-					array->n_ref);
-	if (!groups)
-		return -1;
-
-	n = populate_array_references(array, sched, groups);
-
-	n = group_overlapping_writes(gen, n, groups);
-
-	for (i = 0; i < n; ++i)
-		if (compute_group_bounds(gen, groups[i]) < 0)
-			n = -1;
-
-	n = group_last_shared_overlapping_writes(gen, n, groups);
-
-	n = group_common_shared_memory_tile(gen, array, n, groups);
-
-	set_array_groups(array, n, groups);
-
-	if (n >= 0)
-		return 0;
-
-	for (i = 0; i < array->n_ref; ++i)
-		free_array_ref_group(groups[i]);
-	return -1;
-}
-
-/* Take tiled_sched, project it onto the shared tile loops and
- * the loops that will be wrapped over the threads and
- * store the result in gen->shared_sched.
- * Also compute a projection that projects out the loops that will be
- * wrapped over the threads and store this projection in gen->shared_proj.
- */
-static void compute_shared_sched(struct gpu_gen *gen)
-{
-	isl_space *dim;
-	isl_map *proj;
-	isl_set *par;
-	isl_union_map *sched;
-
-	sched = isl_union_map_copy(gen->tiled_sched);
-
-	dim = isl_union_map_get_space(sched);
-	proj = projection(dim, gen->tiled_len, gen->shared_len + gen->n_block);
-	sched = isl_union_map_apply_range(sched, isl_union_map_from_map(proj));
-
-	dim = isl_union_map_get_space(sched);
-	proj = projection(dim, gen->shared_len + gen->n_block, gen->shared_len);
-
-	gen->shared_sched = sched;
-	gen->shared_proj = isl_union_map_from_map(proj);
-}
-
-/* For each scalar in the input program, check if there are any
- * order dependences active inside the current kernel, within
- * the same iteration of the host schedule.
- * If so, mark the scalar as force_private so that it will be
- * mapped to a register.
- */
-static void check_scalar_live_ranges(struct gpu_gen *gen)
-{
-	int i;
-	isl_map *proj;
-	isl_union_map *sched;
-	isl_union_set *domain;
-	isl_union_map *same_host_iteration;
-
-	gen->any_force_private = 0;
-
-	if (!gen->options->live_range_reordering)
-		return;
-
-	sched = gen->shared_sched;
-	sched = isl_union_map_universe(isl_union_map_copy(sched));
-	domain = isl_union_map_domain(sched);
-
-	sched = isl_union_map_copy(gen->sched);
-	proj = projection(isl_union_map_get_space(sched),
-			    gen->untiled_len, gen->tile_first);
-	sched = isl_union_map_apply_range(sched, isl_union_map_from_map(proj));
-	same_host_iteration = isl_union_map_apply_range(sched,
-			    isl_union_map_reverse(isl_union_map_copy(sched)));
-
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
-		isl_union_map *order;
-
-		array->force_private = 0;
-		if (array->n_index != 0)
-			continue;
-		order = isl_union_map_copy(array->dep_order);
-		order = isl_union_map_intersect_domain(order,
-						    isl_union_set_copy(domain));
-		order = isl_union_map_intersect_range(order,
-						    isl_union_set_copy(domain));
-		order = isl_union_map_intersect(order,
-				    isl_union_map_copy(same_host_iteration));
-		if (!isl_union_map_is_empty(order)) {
-			array->force_private = 1;
-			gen->any_force_private = 1;
-		}
-		isl_union_map_free(order);
-	}
-
-	isl_union_map_free(same_host_iteration);
-	isl_union_set_free(domain);
-}
-
-/* Group references of all arrays in the program.
- */
-static int group_references(struct gpu_gen *gen)
-{
-	int i;
-	int r = 0;
-	isl_union_map *sched;
-
-	sched = isl_union_map_apply_range(isl_union_map_copy(gen->shared_sched),
-					  isl_union_map_copy(gen->shared_proj));
-
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		r = group_array_references(gen, &gen->prog->array[i], sched);
-		if (r < 0)
-			break;
-	}
-
-	isl_union_map_free(sched);
-
-	return r;
-}
-
-/* Free all array information that is local to the current kernel.
- */
-static void free_local_array_info(struct gpu_gen *gen)
-{
-	int i, j;
-
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
-
-		for (j = 0; j < array->n_group; ++j)
-			free_array_ref_group(array->groups[j]);
-		free(array->groups);
+			gpu_array_ref_group_compute_tiling(array->groups[j]);
 	}
 }
 
@@ -3220,11 +957,12 @@ static void free_local_array_info(struct gpu_gen *gen)
  * and add one.
  */
 static __isl_give isl_multi_pw_aff *extract_size(__isl_take isl_set *set,
-	__isl_keep isl_set *context)
+	__isl_take isl_set *context)
 {
 	int i, n;
 	isl_multi_pw_aff *mpa;
 
+	context = isl_set_params(context);
 	n = isl_set_dim(set, isl_dim_set);
 	mpa = isl_multi_pw_aff_zero(isl_set_get_space(set));
 	for (i = 0; i < n; ++i) {
@@ -3243,6 +981,7 @@ static __isl_give isl_multi_pw_aff *extract_size(__isl_take isl_set *set,
 		mpa = isl_multi_pw_aff_set_pw_aff(mpa, i, bound);
 	}
 	isl_set_free(set);
+	isl_set_free(context);
 
 	return mpa;
 }
@@ -3250,7 +989,7 @@ static __isl_give isl_multi_pw_aff *extract_size(__isl_take isl_set *set,
 /* Compute the effective grid size as a list of the sizes in each dimension.
  *
  * The grid size specified by the user or set by default
- * in read_grid_sizes() and applied in tile_schedule(),
+ * in read_grid_sizes() and applied by the block filter,
  * may be too large for the given code in the sense that
  * it may contain blocks that don't need to execute anything.
  * We therefore don't return this grid size, but instead the
@@ -3258,23 +997,26 @@ static __isl_give isl_multi_pw_aff *extract_size(__isl_take isl_set *set,
  * execute code are included in the grid.
  *
  * We first extract a description of the grid, i.e., the possible values
- * of the block ids, from gen->tiled_sched.
- * The block ids are parameters in gen->tiled_sched.
+ * of the block ids, from the domain elements in "domain" and
+ * kernel->block_filter.
+ * The block ids are parameters in kernel->block_filter.
  * We simply need to change them into set dimensions.
  *
  * Then, for each block dimension, we compute the maximal value of the block id
  * and add one.
  */
-static __isl_give isl_multi_pw_aff *extract_grid_size(struct gpu_gen *gen,
-	struct ppcg_kernel *kernel)
+static __isl_give isl_multi_pw_aff *extract_grid_size(
+	struct ppcg_kernel *kernel, __isl_take isl_union_set *domain)
 {
 	int i;
 	isl_set *grid;
 
-	grid = isl_union_map_params(isl_union_map_copy(gen->tiled_sched));
+	domain = isl_union_set_intersect(domain,
+				    isl_union_set_copy(kernel->block_filter));
+	grid = isl_union_set_params(domain);
 	grid = isl_set_from_params(grid);
-	grid = isl_set_add_dims(grid, isl_dim_set, gen->n_grid);
-	for (i = 0; i < gen->n_grid; ++i) {
+	grid = isl_set_add_dims(grid, isl_dim_set, kernel->n_grid);
+	for (i = 0; i < kernel->n_grid; ++i) {
 		int pos;
 		isl_id *id;
 
@@ -3286,7 +1028,7 @@ static __isl_give isl_multi_pw_aff *extract_grid_size(struct gpu_gen *gen,
 		grid = isl_set_project_out(grid, isl_dim_param, pos, 1);
 	}
 
-	return extract_size(grid, kernel->context);
+	return extract_size(grid, isl_set_copy(kernel->context));
 }
 
 /* Compute the size of a fixed bounding box around the origin and "set",
@@ -3321,31 +1063,34 @@ static void extract_fixed_size(__isl_take isl_set *set, int *size)
  * and store the sizes in kernel->block_dim.
  *
  * The block size specified by the user or set by default
- * in read_block_sizes() and applied in thread_tile_schedule(),
+ * in read_block_sizes() and applied by the thread filter,
  * may be too large for the given code in the sense that
  * it may contain threads that don't need to execute anything.
- * We therefore don't store this block size in kernel->block_dim,
- * but instead the smallest block size that ensures that all threads
+ * We therefore update this block size in kernel->block_dim
+ * to the smallest block size that ensures that all threads
  * that actually execute code are included in the block.
  *
+ * The possible values of the thread ids is obtained from
+ * the domain elements "domain" and kernel->thread_filter.
  * The current implementation eliminates all parameters, ensuring
  * that the size is a fixed constant in each dimension.
  * In principle we could also compute parametric sizes.
  * We would have to make sure to project out all b%d and t%d parameters,
  * however.
  */
-static void extract_block_size(struct gpu_gen *gen, struct ppcg_kernel *kernel)
+static void extract_block_size(struct ppcg_kernel *kernel,
+	__isl_take isl_union_set *domain)
 {
 	int i;
 	int nparam;
 	isl_set *block;
-	isl_multi_pw_aff *mpa;
 
-	block = isl_union_map_params(isl_union_map_copy(gen->local_sched));
+	domain = isl_union_set_intersect(domain,
+				    isl_union_set_copy(kernel->thread_filter));
+	block = isl_union_set_params(domain);
 	block = isl_set_from_params(block);
-	block = isl_set_add_dims(block, isl_dim_set, gen->n_block);
-	kernel->n_block = gen->n_block;
-	for (i = 0; i < gen->n_block; ++i) {
+	block = isl_set_add_dims(block, isl_dim_set, kernel->n_block);
+	for (i = 0; i < kernel->n_block; ++i) {
 		int pos;
 		isl_id *id;
 
@@ -3362,24 +1107,34 @@ static void extract_block_size(struct gpu_gen *gen, struct ppcg_kernel *kernel)
 	extract_fixed_size(block, kernel->block_dim);
 }
 
-void ppcg_kernel_free(void *user)
+struct ppcg_kernel *ppcg_kernel_free(struct ppcg_kernel *kernel)
 {
-	struct ppcg_kernel *kernel = user;
-	int i;
+	int i, j;
 
 	if (!kernel)
-		return;
+		return NULL;
 
 	isl_id_list_free(kernel->block_ids);
 	isl_id_list_free(kernel->thread_ids);
 	isl_multi_pw_aff_free(kernel->grid_size);
 	isl_set_free(kernel->context);
+	isl_union_set_free(kernel->core);
 	isl_union_set_free(kernel->arrays);
 	isl_space_free(kernel->space);
 	isl_ast_node_free(kernel->tree);
+	isl_union_set_free(kernel->block_filter);
+	isl_union_set_free(kernel->thread_filter);
+	isl_union_pw_multi_aff_free(kernel->shared_schedule);
 
-	for (i = 0; i < kernel->n_array; ++i)
-		isl_pw_aff_list_free(kernel->array[i].bound);
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
+
+		for (j = 0; j < array->n_group; ++j)
+			gpu_array_ref_group_free(array->groups[j]);
+		free(array->groups);
+
+		isl_pw_aff_list_free(array->bound);
+	}
 	free(kernel->array);
 
 	for (i = 0; i < kernel->n_var; ++i) {
@@ -3389,6 +1144,17 @@ void ppcg_kernel_free(void *user)
 	free(kernel->var);
 
 	free(kernel);
+
+	return NULL;
+}
+
+/* Wrapper around ppcg_kernel_free for use as a isl_id_set_free_user callback.
+ */
+static void ppcg_kernel_free_wrap(void *user)
+{
+	struct ppcg_kernel *kernel = user;
+
+	ppcg_kernel_free(kernel);
 }
 
 static void create_kernel_var(isl_ctx *ctx, struct gpu_array_ref_group *group,
@@ -3409,7 +1175,7 @@ static void create_kernel_var(isl_ctx *ctx, struct gpu_array_ref_group *group,
 	}
 
 	p = isl_printer_to_str(ctx);
-	p = print_array_name(p, group);
+	p = gpu_array_ref_group_print_name(group, p);
 	var->name = isl_printer_get_str(p);
 	isl_printer_free(p);
 
@@ -3420,13 +1186,13 @@ static void create_kernel_var(isl_ctx *ctx, struct gpu_array_ref_group *group,
 					    isl_val_copy(tile->bound[j].size));
 }
 
-static void create_kernel_vars(struct gpu_gen *gen, struct ppcg_kernel *kernel)
+static int create_kernel_vars(struct ppcg_kernel *kernel)
 {
 	int i, j, n;
 
 	n = 0;
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
 
 		for (j = 0; j < array->n_group; ++j) {
 			struct gpu_array_ref_group *group = array->groups[j];
@@ -3436,21 +1202,24 @@ static void create_kernel_vars(struct gpu_gen *gen, struct ppcg_kernel *kernel)
 	}
 
 	kernel->n_var = n;
-	kernel->var = isl_calloc_array(gen->ctx, struct ppcg_kernel_var, n);
-	assert(kernel->var);
+	kernel->var = isl_calloc_array(kernel->ctx, struct ppcg_kernel_var, n);
+	if (!kernel->var)
+		return -1;
 
 	n = 0;
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
 
 		for (j = 0; j < array->n_group; ++j) {
 			struct gpu_array_ref_group *group = array->groups[j];
 			if (!group->private_tile && !group->shared_tile)
 				continue;
-			create_kernel_var(gen->ctx, group, &kernel->var[n]);
+			create_kernel_var(kernel->ctx, group, &kernel->var[n]);
 			++n;
 		}
 	}
+
+	return 0;
 }
 
 /* Replace "pa" by the zero function defined over the universe domain
@@ -3484,47 +1253,69 @@ static __isl_give isl_pw_aff *set_universally_zero(__isl_take isl_pw_aff *pa)
  * function.  Since the access function cannot actually access anything,
  * there is no harm in printing the array sizes as zero.
  */
-static void localize_bounds(struct gpu_gen *gen, struct ppcg_kernel *kernel,
+static void localize_bounds(struct ppcg_kernel *kernel,
 	__isl_keep isl_set *host_domain)
 {
 	int i, j;
 	isl_set *context;
 
-	kernel->array = isl_calloc_array(gen->ctx,
-			    struct gpu_local_array_info, gen->prog->n_array);
-	assert(kernel->array);
-	kernel->n_array = gen->prog->n_array;
-
 	context = isl_set_copy(host_domain);
 	context = isl_set_params(context);
 
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
-		isl_pw_aff_list *local;
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *local = &kernel->array[i];
+		isl_pw_aff_list *bound;
+		int n_index;
 
-		if (array->n_group == 0 && !array->has_compound_element)
+		if (local->n_group == 0 && !local->array->has_compound_element)
 			continue;
 
-		local = isl_pw_aff_list_alloc(gen->ctx, array->n_index);
+		n_index = local->array->n_index;
+		bound = isl_pw_aff_list_alloc(kernel->ctx, n_index);
 
-		for (j = 0; j < array->n_index; ++j) {
+		for (j = 0; j < n_index; ++j) {
 			isl_pw_aff *pwaff;
 			int empty;
 
-			pwaff = isl_pw_aff_copy(array->bound[j]);
+			pwaff = isl_pw_aff_copy(local->array->bound[j]);
 			pwaff = isl_pw_aff_gist(pwaff, isl_set_copy(context));
 			empty = isl_pw_aff_is_empty(pwaff);
 			if (empty < 0)
 				pwaff = isl_pw_aff_free(pwaff);
 			else if (empty)
 				pwaff = set_universally_zero(pwaff);
-			local = isl_pw_aff_list_add(local, pwaff);
+			bound = isl_pw_aff_list_add(bound, pwaff);
 		}
 
-		kernel->array[i].n_index = array->n_index;
-		kernel->array[i].bound = local;
+		local->n_index = n_index;
+		local->bound = bound;
 	}
 	isl_set_free(context);
+}
+
+/* Create the array of gpu_local_array_info structures "array"
+ * inside "kernel".  The number of elements in this array is
+ * the same as the number of arrays in "prog".
+ * Initialize the "array" field of each local array to point
+ * to the corresponding array in "prog".
+ */
+static struct ppcg_kernel *ppcg_kernel_create_local_arrays(
+	struct ppcg_kernel *kernel, struct gpu_prog *prog)
+{
+	int i;
+	isl_ctx *ctx;
+
+	ctx = isl_set_get_ctx(prog->context);
+	kernel->array = isl_calloc_array(ctx,
+			    struct gpu_local_array_info, prog->n_array);
+	if (!kernel->array)
+		return ppcg_kernel_free(kernel);
+	kernel->n_array = prog->n_array;
+
+	for (i = 0; i < prog->n_array; ++i)
+		kernel->array[i].array = &prog->array[i];
+
+	return kernel;
 }
 
 /* Find the element in gen->stmt that has the given "id".
@@ -3540,34 +1331,6 @@ static struct gpu_stmt *find_stmt(struct gpu_prog *prog, __isl_keep isl_id *id)
 	}
 
 	return i < prog->n_stmts ? &prog->stmts[i] : NULL;
-}
-
-/* Set gen->tile_len and gen->n_parallel to those of the statement
- * affected by the first map (part of the schedule)
- * on which this function is called.
- * Because of the way the schedule is constructed, the other statements
- * in the list, if any, should have the same values for these properties.
- */
-static int extract_tile_len(__isl_take isl_map *map, void *user)
-{
-	struct gpu_gen *gen = (struct gpu_gen *) user;
-	isl_id *id;
-	struct gpu_stmt *stmt;
-
-	id = isl_map_get_tuple_id(map, isl_dim_in);
-	stmt = find_stmt(gen->prog, id);
-	isl_id_free(id);
-
-	isl_map_free(map);
-
-	if (!stmt)
-		isl_die(gen->ctx, isl_error_unknown,
-			"statement not found", return -1);
-
-	gen->tile_len = stmt->tile_len;
-	gen->n_parallel = stmt->n_parallel;
-
-	return -1;
 }
 
 void ppcg_kernel_stmt_free(void *user)
@@ -3593,57 +1356,6 @@ void ppcg_kernel_stmt_free(void *user)
 	free(stmt);
 }
 
-/* Set the options of "context" to
- *
- *	{ space -> [x] : x >= first }
- */
-static __isl_give isl_ast_build *set_unroll(
-	__isl_take isl_ast_build *build, __isl_take isl_space *space,
-	int first)
-{
-	isl_ctx *ctx;
-	isl_map *unroll;
-	isl_union_map *opt;
-
-	ctx = isl_ast_build_get_ctx(build);
-
-	space = isl_space_from_domain(space);
-	space = isl_space_add_dims(space, isl_dim_out, 1);
-	space = isl_space_set_tuple_name(space, isl_dim_out, "unroll");
-	unroll = isl_map_universe(space);
-	unroll = isl_map_lower_bound_si(unroll, isl_dim_out, 0, first);
-	opt = isl_union_map_from_map(unroll);
-
-	build = isl_ast_build_set_options(build, opt);
-
-	return build;
-}
-
-/* Extend the schedule "schedule" with the part of "extension"
- * starting at "first" up to "len".
- */
-static __isl_give isl_union_map *extend_schedule(
-	__isl_take isl_union_map *schedule,
-	__isl_take isl_union_map *extension, int first, int len)
-{
-	isl_space *space;
-	isl_map *proj;
-	isl_union_map *umap;
-	isl_set *set;
-
-	space = isl_union_map_get_space(schedule);
-	space = isl_space_set_from_params(space);
-	space = isl_space_add_dims(space, isl_dim_set, len);
-	proj = isl_set_identity(isl_set_universe(space));
-	proj = isl_map_project_out(proj, isl_dim_out, 0, first);
-	extension = isl_union_map_apply_range(extension,
-						isl_union_map_from_map(proj));
-
-	schedule = isl_union_map_range_product(schedule, extension);
-
-	return schedule;
-}
-
 /* Return the gpu_stmt_access in the list "accesses" that corresponds
  * to "ref_id".
  */
@@ -3661,12 +1373,12 @@ static struct gpu_stmt_access *find_access(struct gpu_stmt_access *accesses,
 
 /* Return the index of the array called "name" in the list of arrays.
  */
-static int find_array_index(struct gpu_gen *gen, const char *name)
+static int find_array_index(struct ppcg_kernel *kernel, const char *name)
 {
 	int i;
 
-	for (i = 0; i < gen->prog->n_array; ++i)
-		if (!strcmp(name, gen->prog->array[i].name))
+	for (i = 0; i < kernel->n_array; ++i)
+		if (!strcmp(name, kernel->array[i].array->name))
 			return i;
 
 	return -1;
@@ -3678,8 +1390,8 @@ static int find_array_index(struct gpu_gen *gen, const char *name)
  * "accesses" is the list of gpu_stmt_access in the statement.
  * "iterator_map" expresses the statement iterators in terms of
  * the AST loop iterators.
- * "sched2shared" expresses the first shared_len dimensions of
- * the computed schedule in terms of the AST loop iterators.
+ * "sched2shared" expresses the outer shared_schedule_dim dimensions of
+ * the kernel schedule in terms of the AST loop iterators.
  *
  * The following fields are set in transform_index and used in transform_expr.
  * "array" is the array that is being accessed.
@@ -3715,6 +1427,26 @@ static const char *get_outer_array_name(__isl_keep isl_map *access)
 	return name;
 }
 
+/* Return a pointer to the gpu_array_ref_group in "local"
+ * that contains the reference "access".
+ * Return NULL if no such group can be found.
+ */
+static struct gpu_array_ref_group *find_ref_group(
+	struct gpu_local_array_info *local, struct gpu_stmt_access *access)
+{
+	int i, j;
+
+	for (i = 0; i < local->n_group; ++i) {
+		struct gpu_array_ref_group *group = local->groups[i];
+
+		for (j = 0; j < group->n_ref; ++j)
+			if (group->refs[j] == access)
+				return group;
+	}
+
+	return NULL;
+}
+
 /* Index transformation callback for pet_stmt_build_ast_exprs.
  *
  * "index" expresses the array indices in terms of statement iterators
@@ -3733,6 +1465,8 @@ static const char *get_outer_array_name(__isl_keep isl_map *access)
  *
  *	[D -> A] -> T
  *
+ * where D corresponds to the outer group->depth dimensions of
+ * the kernel schedule.
  * The index is of the form
  *
  *	L -> A
@@ -3760,11 +1494,13 @@ static __isl_give isl_multi_pw_aff *transform_index(
 	struct gpu_array_tile *tile;
 	isl_pw_multi_aff *iterator_map;
 	int i;
+	int dim;
 	const char *name;
 	isl_space *space;
 	isl_multi_pw_aff *tiling;
 	isl_pw_multi_aff *pma;
 	isl_multi_pw_aff *mpa;
+	isl_pw_multi_aff *sched2depth;
 
 	data->array = NULL;
 
@@ -3778,7 +1514,7 @@ static __isl_give isl_multi_pw_aff *transform_index(
 		return index;
 
 	name = get_outer_array_name(access->access);
-	i = find_array_index(data->gen, name);
+	i = find_array_index(data->gen->kernel, name);
 	if (i < 0)
 		isl_die(isl_multi_pw_aff_get_ctx(index), isl_error_internal,
 			"cannot find array",
@@ -3786,12 +1522,12 @@ static __isl_give isl_multi_pw_aff *transform_index(
 	data->array = &data->gen->prog->array[i];
 	data->local_array = &data->gen->kernel->array[i];
 
-	if (access->group < 0) {
+	group = find_ref_group(data->local_array, access);
+	if (!group) {
 		data->global = 1;
 		return index;
 	}
 
-	group = data->array->groups[access->group];
 	tile = group->private_tile;
 	if (!tile)
 		tile = group->shared_tile;
@@ -3802,8 +1538,11 @@ static __isl_give isl_multi_pw_aff *transform_index(
 	space = isl_space_range(isl_multi_pw_aff_get_space(index));
 	space = isl_space_map_from_set(space);
 	pma = isl_pw_multi_aff_identity(space);
-	pma = isl_pw_multi_aff_product(
-			isl_pw_multi_aff_copy(data->sched2shared), pma);
+	sched2depth = isl_pw_multi_aff_copy(data->sched2shared);
+	dim = isl_pw_multi_aff_dim(sched2depth, isl_dim_out);
+	sched2depth = isl_pw_multi_aff_drop_dims(sched2depth, isl_dim_out,
+					    group->depth, dim - group->depth);
+	pma = isl_pw_multi_aff_product(sched2depth, pma);
 	tiling = isl_multi_pw_aff_from_multi_aff(
 				    isl_multi_aff_copy(tile->tiling));
 	tiling = isl_multi_pw_aff_pullback_pw_multi_aff(tiling, pma);
@@ -3993,48 +1732,40 @@ static __isl_give isl_ast_expr *transform_expr(__isl_take isl_ast_expr *expr,
 }
 
 /* This function is called for each instance of a user statement
- * in the kernel.
+ * in the kernel, identified by "gpu_stmt".
  *
  * We attach a struct ppcg_kernel_stmt to the "node", containing
  * a computed AST expression for each access.
  * These AST expressions are computed from iterator_map,
  * which expresses the domain
  * elements in terms of the generated loops, and sched2shared,
- * which expresses the first shared_len dimensions of the schedule
- * computed by PPCG in terms of the generated loops.
+ * which expresses the outer shared_schedule_dim dimensions of
+ * the kernel schedule computed by PPCG in terms of the generated loops.
  */
-static __isl_give isl_ast_node *at_each_domain(__isl_take isl_ast_node *node,
-	__isl_keep isl_ast_build *build, void *user)
+static __isl_give isl_ast_node *create_domain_leaf(struct gpu_gen *gen,
+	__isl_take isl_ast_node *node, __isl_keep isl_ast_build *build,
+	struct gpu_stmt *gpu_stmt)
 {
 	struct ppcg_transform_data data;
-	struct gpu_gen *gen = (struct gpu_gen *) user;
 	struct ppcg_kernel_stmt *stmt;
 	isl_id *id;
 	isl_pw_multi_aff *sched2shared;
 	isl_map *map;
 	isl_pw_multi_aff *iterator_map;
-	isl_ast_expr *expr, *arg;
 	isl_union_map *schedule;
 
 	stmt = isl_calloc_type(gen->ctx, struct ppcg_kernel_stmt);
 	if (!stmt)
 		return isl_ast_node_free(node);
 
-	expr = isl_ast_node_user_get_expr(node);
-	arg = isl_ast_expr_get_op_arg(expr, 0);
-	id = isl_ast_expr_get_id(arg);
-
 	schedule = isl_ast_build_get_schedule(build);
 	map = isl_map_reverse(isl_map_from_union_map(schedule));
 	iterator_map = isl_pw_multi_aff_from_map(map);
-	sched2shared = compute_sched_to_shared(gen,
+	sched2shared = compute_sched_to_shared(gen->kernel,
 					isl_pw_multi_aff_copy(iterator_map));
 
 	stmt->type = ppcg_kernel_domain;
-	stmt->u.d.stmt = find_stmt(gen->prog, id);
-	if (!stmt->u.d.stmt)
-		isl_die(gen->ctx, isl_error_internal,
-			"statement not found", goto error);
+	stmt->u.d.stmt = gpu_stmt;
 
 	data.gen = gen;
 	data.accesses = stmt->u.d.stmt->accesses;
@@ -4044,99 +1775,59 @@ static __isl_give isl_ast_node *at_each_domain(__isl_take isl_ast_node *node,
 					    build, &transform_index, &data,
 					    &transform_expr, &data);
 
-	isl_id_free(id);
 	isl_pw_multi_aff_free(iterator_map);
 	isl_pw_multi_aff_free(sched2shared);
-	isl_ast_expr_free(arg);
-	isl_ast_expr_free(expr);
 
 	id = isl_id_alloc(gen->ctx, NULL, stmt);
 	id = isl_id_set_free_user(id, &ppcg_kernel_stmt_free);
 	return isl_ast_node_set_annotation(node, id);
-error:
-	isl_id_free(id);
-	isl_pw_multi_aff_free(iterator_map);
-	ppcg_kernel_stmt_free(stmt);
-	isl_pw_multi_aff_free(sched2shared);
-	return isl_ast_node_free(node);
 }
 
-/* This function is called when code has been generated for the shared
- * tile loops.  The "schedule" refers only to the original statements.
- *
- * We extend the schedule with that part of gen->local_sched that hasn't
- * been taken into account yet.  This introduces parameters referring
- * to thread ids in the schedule, so we add them (with the appropriate
- * bounds to the context as well).
- * Finally, we set the appropriate unrolling options
- * if gen->first_unroll is set.
- */
-static __isl_give isl_ast_node *create_domain_leaf(
-	__isl_take isl_union_map *schedule, __isl_take isl_ast_build *build,
-	void *user)
-{
-	struct gpu_gen *gen = (struct gpu_gen *) user;
-	isl_space *space;
-	isl_union_map *sched;
-	isl_ast_node *tree;
-	isl_set *set;
-	isl_id_list *iterators;
-	int n;
-
-	schedule = extend_schedule(schedule,
-			isl_union_map_copy(gen->local_sched),
-			gen->shared_len, gen->thread_tiled_len);
-
-	space = isl_ast_build_get_schedule_space(build);
-	set = isl_set_universe(space);
-	set = add_bounded_parameters(set, gen->kernel->block_dim,
-					gen->kernel->thread_ids);
-	build = isl_ast_build_restrict(build, set);
-
-	n = gen->thread_tiled_len - gen->shared_len;
-
-	if (gen->first_unroll >= 0) {
-		space = isl_space_set_alloc(gen->ctx, 0, n);
-		build = set_unroll(build, space, gen->first_unroll);
-	}
-	iterators = ppcg_scop_generate_names(gen->prog->scop, n, "c");
-	build = isl_ast_build_set_iterators(build, iterators);
-	build = isl_ast_build_set_at_each_domain(build, &at_each_domain, gen);
-	tree = isl_ast_build_node_from_schedule_map(build, schedule);
-	isl_ast_build_free(build);
-
-	return tree;
-}
-
-/* This function is called for each statement node in the AST of the code
+/* This function is called for each statement node in the AST
  * for copying to or from shared/private memory.
  * Attach a pointer to a ppcg_kernel_stmt representing the copy
  * statement to the node.
  * The statement name is "read" or "write", depending on whether we are
  * reading from global memory or writing to global memory.
- * The name of the T space is {shared,private}_<array>.
  *
  * The schedule is of the form
  *
- *	type[A -> T] -> L
+ *	type[D -> A] -> L
  *
- * where A refers to a piece of an array and T to the corresponding
- * shifted tile.  We split this schedule into mappings L -> A and L -> T
+ * where D corresponds to the outer group->depth dimensions of
+ * the kernel schedule, A to the global array and L to the outer
+ * generated AST schedule.
+ * We compute the inverse and strip off the type, resulting in
+ *
+ *	L -> [D -> A]
+ *
+ * We combine this mapping with on the one hand the projection
+ *
+ *	[D -> A] -> A
+ *
+ * and on the other hand the group tiling
+ *
+ *	[D -> A] -> T
+ *
+ * resulting in
+ *
+ *	L -> A		and 	L -> T
+ *
  * and store the corresponding expressions in stmt->index and stmt->local_index,
  * where stmt points to the ppcg_kernel_stmt that is attached to the node.
  */
-static __isl_give isl_ast_node *attach_copy_stmt(__isl_take isl_ast_node *node,
-	__isl_keep isl_ast_build *build, void *user)
+static __isl_give isl_ast_node *create_access_leaf(struct gpu_gen *gen,
+	struct gpu_array_ref_group *group, __isl_take isl_ast_node *node,
+	__isl_keep isl_ast_build *build)
 {
-	struct gpu_gen *gen = (struct gpu_gen *) user;
 	struct ppcg_kernel_stmt *stmt;
+	struct gpu_array_tile *tile;
 	isl_id *id;
 	isl_ast_expr *expr;
 	isl_space *space;
-	isl_map *access, *local_access, *map;
-	isl_pw_multi_aff *pma;
+	isl_map *access;
+	isl_pw_multi_aff *pma, *pma2;
 	const char *type;
-	int array_index;
 
 	stmt = isl_calloc_type(gen->ctx, struct ppcg_kernel_stmt);
 	if (!stmt)
@@ -4146,28 +1837,26 @@ static __isl_give isl_ast_node *attach_copy_stmt(__isl_take isl_ast_node *node,
 	type = isl_map_get_tuple_name(access, isl_dim_in);
 	stmt->u.c.read = !strcmp(type, "read");
 	access = isl_map_reverse(access);
-	space = isl_space_unwrap(isl_space_range(isl_map_get_space(access)));
-	local_access = isl_map_copy(access);
-
-	map = isl_map_domain_map(isl_map_universe(isl_space_copy(space)));
-	id = isl_map_get_tuple_id(access, isl_dim_out);
-	map = isl_map_set_tuple_id(map, isl_dim_in, id);
-	access = isl_map_apply_range(access, map);
 	pma = isl_pw_multi_aff_from_map(access);
-	expr = isl_ast_build_access_from_pw_multi_aff(build, pma);
+	pma = isl_pw_multi_aff_reset_tuple_id(pma, isl_dim_out);
+
+	space = isl_space_range(isl_pw_multi_aff_get_space(pma));
+	space = isl_space_unwrap(space);
+	pma2 = isl_pw_multi_aff_range_map(space);
+	pma2 = isl_pw_multi_aff_pullback_pw_multi_aff(pma2,
+						    isl_pw_multi_aff_copy(pma));
+	expr = isl_ast_build_access_from_pw_multi_aff(build, pma2);
 	stmt->u.c.index = expr;
 
-	map = isl_map_range_map(isl_map_universe(space));
-	id = isl_map_get_tuple_id(local_access, isl_dim_out);
-	map = isl_map_set_tuple_id(map, isl_dim_in, id);
-	local_access = isl_map_apply_range(local_access, map);
-	pma = isl_pw_multi_aff_from_map(local_access);
-	expr = isl_ast_build_access_from_pw_multi_aff(build, pma);
+	tile = gpu_array_ref_group_tile(group);
+	pma2 = isl_pw_multi_aff_from_multi_aff(
+					    isl_multi_aff_copy(tile->tiling));
+	pma2 = isl_pw_multi_aff_pullback_pw_multi_aff(pma2, pma);
+	expr = isl_ast_build_access_from_pw_multi_aff(build, pma2);
 	stmt->u.c.local_index = expr;
 
-	stmt->u.c.array = gen->copy_group->array;
-	array_index = stmt->u.c.array - gen->prog->array;
-	stmt->u.c.local_array = &gen->kernel->array[array_index];
+	stmt->u.c.array = group->array;
+	stmt->u.c.local_array = group->local_array;
 	stmt->type = ppcg_kernel_copy;
 
 	id = isl_id_alloc(gen->ctx, NULL, stmt);
@@ -4175,453 +1864,83 @@ static __isl_give isl_ast_node *attach_copy_stmt(__isl_take isl_ast_node *node,
 	return isl_ast_node_set_annotation(node, id);
 }
 
-/* Given a schedule of the form
- *
- *	[S -> A] -> L
- *
- * (with S the first shared_len dimensions of the computed schedule,
- * A the array and L the schedule correponding to the generated loops),
- * indicating where to copy the array elements that need to be copied,
- * construct code for performing the copying.
- *
- * "group" is the array reference group that is being copied
- * "type" is either "read" or "write"
- * private is set if copying needs to be performed to/from registers
- *
- * We first construct a mapping to a shifted tile of the array,
- *
- *	[S -> A] -> T(S,A)					(1)
- *
- * If private is set, then we also use this mapping as a schedule
- * (which is already thread-specific and will be completely unrolled).
- * Otherwise, we wrap/tile the range over the threads.
- * The result is
- *
- *	[S -> A] -> T'(S,A)
- *
- * Combined with the given schedule, we have
- *
- *	[S -> A] -> [L -> T'(S,A)]				(2)
- *
- * From the shifted tile mapping, we construct a mapping
- *
- *	[S -> A] -> [A -> T(S,A)]
- *
- * and apply it to the schedule (2), obtaining
- *
- *	[A -> T(S(L),A)] -> [L -> T'(S(L),A)]
- *
- * Note that we can project out S because it is uniquely defined by L.
- */
-static __isl_give isl_ast_node *copy_access(struct gpu_gen *gen,
-	__isl_take isl_map *sched,
-	const char *type, struct gpu_array_ref_group *group,
-	__isl_take isl_ast_build *build, int private)
-{
-	isl_space *space;
-	isl_ast_node *tree;
-	isl_map *schedule, *shift, *map;
-	isl_set *set;
-	isl_id_list *iterators;
-	int n;
-
-	shift = shift_access(group);
-
-	schedule = isl_map_copy(shift);
-	schedule = isl_map_reset_tuple_id(schedule, isl_dim_out);
-	if (!private)
-		schedule = tile_access_schedule(gen, schedule);
-
-	n = isl_map_dim(schedule, isl_dim_out);
-	set = isl_set_universe(isl_ast_build_get_schedule_space(build));
-	set = add_bounded_parameters(set, gen->kernel->block_dim,
-					gen->kernel->thread_ids);
-
-	schedule = isl_map_range_product(sched, schedule);
-
-	space = isl_space_domain(isl_map_get_space(shift));
-	map = isl_map_range_map(isl_map_universe(isl_space_unwrap(space)));
-	map = isl_map_range_product(map, shift);
-
-	schedule = isl_map_apply_domain(schedule, map);
-
-	schedule = isl_map_set_tuple_name(schedule, isl_dim_in, type);
-
-	build = isl_ast_build_restrict(build, set);
-
-	gen->copy_group = group;
-
-	if (private) {
-		space = isl_space_range(isl_map_get_space(schedule));
-		space = isl_space_range(isl_space_unwrap(space));
-		build = set_unroll(build, space, 0);
-	}
-	iterators = ppcg_scop_generate_names(gen->prog->scop, n, "c");
-	build = isl_ast_build_set_iterators(build, iterators);
-	build = isl_ast_build_set_at_each_domain(build, &attach_copy_stmt, gen);
-	tree = isl_ast_build_node_from_schedule_map(build,
-					    isl_union_map_from_map(schedule));
-	isl_ast_build_free(build);
-
-	return tree;
-}
-
-/* Return code for reading into or writing from shared memory
- * the given array reference group.
- *
- * If we are performing a read from global memory to shared memory and
- * if the array involved is not a scalar, then we copy
- * the entire tile to shared memory.  This may result in some extra
- * elements getting copied, but it should lead to simpler code
- * (which means that fewer registers may be needed) and less divergence.
- *
- * Otherwise, we only copy the elements that will be read or have been written
- * in the kernel.
- *
- *
- * The input "sched" is of the form.
- *
- *	type[S -> A] -> L
- *
- * with S the first shared_len dimensions of the computed schedule,
- * A the array and L the schedule correponding to the generated loops.
- *
- * We first drop "type",
- *
- *	[S -> A] -> L
- *
- * If the above conditions are satisfied, we project out A,
- * resulting in
- *
- *	S -> L
- *
- * and then introduce the group tile [S -> T], resulting in
- *
- *	[S -> T] -> L
- */
-static __isl_give isl_ast_node *copy_group_shared_accesses(
-	struct gpu_gen *gen, struct gpu_array_ref_group *group,
-	__isl_take isl_map *sched, __isl_take isl_ast_build *build)
-{
-	const char *type;
-	int read;
-	isl_union_map *access;
-
-	type = isl_map_get_tuple_name(sched, isl_dim_in);
-	read = !strcmp(type, "read");
-
-	sched = isl_map_reset_tuple_id(sched, isl_dim_in);
-
-	if (read && !gpu_array_is_scalar(group->array)) {
-		isl_space *space;
-		isl_map *map;
-
-		space = isl_space_domain(isl_map_get_space(sched));
-		space = isl_space_unwrap(space);
-		map = isl_map_domain_map(isl_map_universe(space));
-		sched = isl_map_apply_domain(sched, map);
-
-		map = group_tile(group);
-		map = isl_map_reverse(isl_map_domain_map(map));
-		sched = isl_map_apply_domain(sched, map);
-	}
-
-	return copy_access(gen, sched, type, group, build, 0);
-}
-
-/* Return code for reading into or writing from private memory
- * the given array reference group.
- *
- * Let S be the first shared_len dimensions of the computed schedule,
- * D the iteration domains, A the array and L the schedule correponding
- * to the generated loops.
- * "sched" is of the form
- *
- *	type[S -> A] -> L
- *
- * where type is either "read" or "write".
- * We apply the privatization D -> S(t), with t the thread ids,
- * to the access relation D -> A to obtain the privatized access relation
- *
- *	S(t) -> A
- *
- * We drop the type from "sched" and intersect with the privatized access
- * relation to obtain
- *
- *	[S(t) -> A] -> L
- */
-static __isl_give isl_ast_node *copy_group_private_accesses(
-	struct gpu_gen *gen, struct gpu_array_ref_group *group,
-	__isl_take isl_map *sched, __isl_take isl_ast_build *build)
-{
-	const char *type;
-	int read;
-	isl_union_map *priv;
-	isl_union_map *access;
-	isl_map *access_map;
-
-	type = isl_map_get_tuple_name(sched, isl_dim_in);
-	read = !strcmp(type, "read");
-
-	priv = isl_union_map_from_map(isl_map_copy(gen->privatization));
-	priv = isl_union_map_apply_range(isl_union_map_copy(gen->shared_sched),
-					priv);
-
-	access = group_access_relation(group, read, !read);
-	access = isl_union_map_apply_domain(access, priv);
-	access_map = isl_map_from_union_map(access);
-
-	sched = isl_map_reset_tuple_id(sched, isl_dim_in);
-	sched = isl_map_intersect_domain(sched, isl_map_wrap(access_map));
-
-	return copy_access(gen, sched, type, group, build, 1);
-}
-
-/* Return code for reading into or writing from shared or private memory.
- *
- * "schedule" is of the form
- *
- *	type[S -> A] -> L
- *
- * with S be the first shared_len dimensions of the computed schedule,
- * A the array and L the schedule correponding to the generated loops.
- * The array reference group is attached to "type".
- */
-static __isl_give isl_ast_node *create_access_leaf(
-	struct gpu_gen *gen, __isl_take isl_map *schedule,
-	__isl_take isl_ast_build *build)
-{
-	struct gpu_array_ref_group *group;
-	isl_id *id;
-
-	id = isl_map_get_tuple_id(schedule, isl_dim_in);
-	group = isl_id_get_user(id);
-	isl_id_free(id);
-
-	if (group->private_tile)
-		return copy_group_private_accesses(gen, group, schedule,
-							build);
-	else
-		return copy_group_shared_accesses(gen, group, schedule,
-							build);
-}
-
-/* Create a domain node representing a synchronization.
+/* Create a synchronization ppcg_kernel_stmt and
+ * attach it to the node "node" representing the synchronization.
  */
 static __isl_give isl_ast_node *create_sync_leaf(
-	struct gpu_gen *gen, __isl_take isl_map *schedule,
-	__isl_take isl_ast_build *build)
+	struct gpu_gen *gen, __isl_take isl_ast_node *node,
+	__isl_keep isl_ast_build *build)
 {
 	struct ppcg_kernel_stmt *stmt;
 	isl_id *id;
-	isl_space *space;
-	isl_ast_node *node;
-	isl_ast_expr *expr;
-
-	isl_map_free(schedule);
 
 	stmt = isl_calloc_type(gen->ctx, struct ppcg_kernel_stmt);
 	if (!stmt)
-		return NULL;
+		return isl_ast_node_free(node);
 
 	stmt->type = ppcg_kernel_sync;
-
-	space = isl_ast_build_get_schedule_space(build);
-	space = isl_space_from_domain(space);
-	space = isl_space_set_tuple_name(space, isl_dim_out, "sync");
-	expr = isl_ast_build_call_from_pw_multi_aff(build,
-		    isl_pw_multi_aff_from_multi_aff(isl_multi_aff_zero(space)));
-	node = isl_ast_node_alloc_user(expr);
-	isl_ast_build_free(build);
-
 	id = isl_id_alloc(gen->ctx, NULL, stmt);
 	id = isl_id_set_free_user(id, &ppcg_kernel_stmt_free);
 	return isl_ast_node_set_annotation(node, id);
 }
 
-/* This function is called during the code generation at the point
- * where the schedule domain element is completely determined by
- * the generated code.  The input schedule contains the original
- * statements as well as synchronization and copy "statements".
- * The latter are scheduled at different points than any of the original
- * statements, so they will only arrive here in isolation.
+/* This function is called for each instance of a user statement
+ * in the kernel.  This may be one of the original user statements
+ * or a statement introduced by PPCG.
  *
- * If the current schedule only refers to a single statement,
+ * We assume that the original user statements only have a name
+ * and no user pointer.  The statements introduced by PPCG
+ * on the other hand all have a user pointer.
+ *
+ * If the user statement is one of the original user statements
+ * (one with no user pointer), then we call create_domain_leaf.  Otherwise,
  * we check if it is a copy or synchronization statement and
  * call the appropriate functions.
- * Otherwise, we assume we are dealing with the original statements
- * and we call create_domain_leaf.
  */
-static __isl_give isl_ast_node *create_kernel_leaf(
-	__isl_take isl_ast_build *build, void *user)
+static __isl_give isl_ast_node *at_domain(__isl_take isl_ast_node *node,
+	__isl_keep isl_ast_build *build, void *user)
 {
 	struct gpu_gen *gen = (struct gpu_gen *) user;
-	isl_map *map;
-	isl_union_map *schedule;
+	isl_ast_expr *expr, *arg;
+	isl_id *id;
+	int is_sync;
 	const char *name;
+	void *p;
 
-	schedule = isl_ast_build_get_schedule(build);
+	expr = isl_ast_node_user_get_expr(node);
+	arg = isl_ast_expr_get_op_arg(expr, 0);
+	id = isl_ast_expr_get_id(arg);
+	name = isl_id_get_name(id);
+	p = isl_id_get_user(id);
+	isl_ast_expr_free(expr);
+	isl_ast_expr_free(arg);
 
-	if (isl_union_map_n_map(schedule) != 1)
-		return create_domain_leaf(schedule, build, user);
+	if (!p) {
+		struct gpu_stmt *gpu_stmt;
 
-	map = isl_map_from_union_map(schedule);
-	name = isl_map_get_tuple_name(map, isl_dim_in);
-	if (!strcmp(name, "read") || !strcmp(name, "write"))
-		return create_access_leaf(gen, map, build);
-	if (!strcmp(name, "sync"))
-		return create_sync_leaf(gen, map, build);
+		gpu_stmt = find_stmt(gen->prog, id);
+		isl_id_free(id);
+		if (!gpu_stmt)
+			isl_die(gen->ctx, isl_error_internal,
+				"statement not found",
+				return isl_ast_node_free(node));
 
-	return create_domain_leaf(isl_union_map_from_map(map), build, user);
-}
-
-/* Mark all odd schedule dimensions as "atomic" (when the even dimensions
- * have value 0) and all even schedule dimensions as "unroll".
- *
- * That is, the options look as follows
- *
- *	{ [0, b, 0, d, ..., 0] -> atomic[i] : exists a : i = 2 a + 1;
- *	  [a, b, c, d, ..., z] -> unroll[i] : exists a : i = 2 a }
- *
- * The even positions are used to be able to schedule copying blocks
- * and synchronization before or after each level of the shared memory
- * tile loops and we want to make sure that code for these is generated
- * separately (within each level).
- */
-static __isl_give isl_ast_build *set_atomic_and_unroll(
-	__isl_take isl_ast_build *build,
-	__isl_take isl_space *space, int sched_len)
-{
-	isl_ctx *ctx;
-	isl_map *map;
-	isl_constraint *c;
-	isl_union_map *opt;
-	isl_local_space *ls;
-	int i, n;
-
-	ctx = isl_ast_build_get_ctx(build);
-
-	space = isl_space_params(space);
-	space = isl_space_add_dims(space, isl_dim_set, sched_len);
-	space = isl_space_from_domain(space);
-	space = isl_space_add_dims(space, isl_dim_out, 2);
-	map = isl_map_universe(isl_space_copy(space));
-	for (i = 0; i < sched_len; i += 2)
-		map = isl_map_fix_si(map, isl_dim_in, i, 0);
-	ls = isl_local_space_from_space(isl_map_get_space(map));
-	c = isl_equality_alloc(ls);
-	c = isl_constraint_set_coefficient_si(c, isl_dim_out, 0, 1);
-	c = isl_constraint_set_coefficient_si(c, isl_dim_out, 1, 2);
-	c = isl_constraint_set_constant_si(c, 1);
-	map = isl_map_add_constraint(map, c);
-	map = isl_map_project_out(map, isl_dim_out, 1, 1);
-	map = isl_map_set_tuple_name(map, isl_dim_out, "atomic");
-	opt = isl_union_map_from_map(map);
-
-	map = isl_map_universe(space);
-	ls = isl_local_space_from_space(isl_map_get_space(map));
-	c = isl_equality_alloc(ls);
-	c = isl_constraint_set_coefficient_si(c, isl_dim_out, 0, 1);
-	c = isl_constraint_set_coefficient_si(c, isl_dim_out, 1, 2);
-	map = isl_map_add_constraint(map, c);
-	map = isl_map_project_out(map, isl_dim_out, 1, 1);
-	map = isl_map_set_tuple_name(map, isl_dim_out, "unroll");
-	opt = isl_union_map_add_map(opt, map);
-
-	build = isl_ast_build_set_options(build, opt);
-
-	return build;
-}
-
-/* Return a map that maps a space of dimension gen->shared_len
- * to its last dimensions starting at gen->tile_first.
- * The range is of dimension
- *
- *	2 * (gen->shared_len - gen->tile_first) + 1
- *
- * The input dimensions are mapped to the odd dimensions in the output,
- * while the even dimensions (except 2*pos) are fixed to 0.
- * Output dimension 2*pos (if pos >= 0) is fixed to "val".
- * If pos >= 0, then only the pos first dimensions starting at gen->tile_first
- * are mapped to the output.  The remaining input dimensions are projected
- * out and the corresponding output dimensions are fixed to 0.
- */
-static __isl_give isl_map *insert_even(struct gpu_gen *gen,
-	__isl_take isl_space *space, int pos, int val)
-{
-	int i, n;
-	isl_map *proj;
-
-	space = isl_space_set_from_params(space);
-	space = isl_space_add_dims(space, isl_dim_set, gen->shared_len);
-	space = isl_space_map_from_set(space);
-	proj = isl_map_identity(space);
-	proj = isl_map_project_out(proj, isl_dim_out, 0, gen->tile_first);
-	n = gen->shared_len - gen->tile_first;
-	for (i = 0; i <= n; ++i) {
-		proj = isl_map_insert_dims(proj, isl_dim_out, 2 * i, 1);
-		if (i == pos)
-			proj = isl_map_fix_si(proj, isl_dim_out, 2 * i, val);
-		else
-			proj = isl_map_fix_si(proj, isl_dim_out, 2 * i, 0);
+		return create_domain_leaf(gen, node, build, gpu_stmt);
 	}
 
-	if (pos < 0)
-		return proj;
-
-	proj = isl_map_eliminate(proj, isl_dim_in, gen->tile_first + pos,
-				gen->shared_len - (gen->tile_first + pos));
-	for (i = pos; i < n; ++i)
-		proj = isl_map_fix_si(proj, isl_dim_out, 2 * i + 1, 0);
-
-	return proj;
-}
-
-/* Given the AST context schedule "schedule" and the mapping from
- * domains to the shared tile loops "shared_sched", add a schedule
- * for a synchronization operation at position "val" of loop level "pos".
- *
- * schedule is of the form
- *
- *	D -> L
- *
- * (with D the iteration domains and L the already generated loops),
- * while shared_sched is of the form
- *
- *	D -> S
- *
- * We combine them into
- *
- *	L -> S
- *
- * apply a mapping
- *
- *	[s_0,...] -> [0,s_{tile_first},0,..., val, 0, 0, ... 0]
- *
- * and use the result as a schedule for "sync".
- */
-static __isl_give isl_union_map *add_sync_schedule(struct gpu_gen *gen,
-	__isl_take isl_union_map *res, __isl_keep isl_union_map *schedule,
-	__isl_keep isl_union_map *shared_sched, int pos, int val)
-{
-	isl_space *space;
-	isl_map *proj, *map;
-
-	shared_sched = isl_union_map_copy(shared_sched);
-	schedule = isl_union_map_copy(schedule);
-
-	space = isl_union_map_get_space(shared_sched);
-	schedule = isl_union_map_apply_domain(shared_sched, schedule);
-	map = isl_map_from_union_map(schedule);
-
-	proj = insert_even(gen, space, pos, val);
-	map = isl_map_apply_range(map, proj);
-	map = isl_map_from_range(isl_map_wrap(map));
-	map = isl_map_set_tuple_name(map, isl_dim_in, "sync");
-
-	res = isl_union_map_add_map(res, map);
-
-	return res;
+	is_sync = gpu_tree_id_is_sync(id, gen->kernel);
+	isl_id_free(id);
+	if (is_sync < 0)
+		return isl_ast_node_free(node);
+	if (!strcmp(name, "read") || !strcmp(name, "write")) {
+		struct gpu_array_ref_group *group = p;
+		return create_access_leaf(gen, group, node, build);
+	}
+	if (!is_sync)
+		isl_die(gen->ctx, isl_error_internal,
+			"unknown statement type",
+			return isl_ast_node_free(node));
+	return create_sync_leaf(gen, node, build);
 }
 
 /* Given a set of wrapped references "ref", return the corresponding
@@ -4666,8 +1985,7 @@ static __isl_give isl_union_map *wrapped_reference_to_access(
 
 /* Given an access relation "access" from "group", remove those reads
  * if ("read" is 1) or writes (if "read" is 0) that are only needed to
- * communicate data within the same iteration of the last_shared dimension
- * of the group.
+ * communicate data within the same iteration of "sched".
  *
  * If the access is a read then it is either an element of
  *
@@ -4704,8 +2022,7 @@ static __isl_give isl_union_map *wrapped_reference_to_access(
  *	[[D -> R] -> [D' -> R']]
  *
  * of pairs of domain iterations accessing the reference group
- * and references in the group that are scheduled to the same iteration
- * of the last_shared dimension.
+ * and references in the group that are coscheduled by "sched".
  *
  * If this relation does not intersect the dataflow dependences,
  * then there is nothing we can possibly remove, unless the dataflow
@@ -4735,30 +2052,25 @@ static __isl_give isl_union_map *wrapped_reference_to_access(
  * to the corresponding access relation and take the union with
  * the live out/in relation.
  */
-static __isl_give isl_union_map *remove_local_accesses(struct gpu_gen *gen,
-	struct gpu_array_ref_group *group, __isl_take isl_union_map *access,
+static __isl_give isl_union_map *remove_local_accesses(
+	struct gpu_prog *prog, struct gpu_array_ref_group *group,
+	__isl_take isl_union_map *access, __isl_take isl_union_map *sched,
 	int read)
 {
 	int empty;
 	isl_union_pw_multi_aff *tagger;
 	isl_union_set *domain;
-	isl_space *space;
-	isl_union_map *sched, *local, *tagged, *external;
+	isl_union_map *local, *tagged, *external;
 	isl_union_set *tag_set;
-	isl_map *proj;
 
-	if (isl_union_map_is_empty(access))
+	if (isl_union_map_is_empty(access)) {
+		isl_union_map_free(sched);
 		return access;
+	}
 
 	tagged = group_tagged_access_relation(group);
 
-	sched = isl_union_map_copy(gen->sched);
-
-	space = isl_union_map_get_space(sched);
-	proj = projection(space, gen->untiled_len, group->last_shared + 1);
-	sched = isl_union_map_apply_range(sched, isl_union_map_from_map(proj));
-
-	tagger = isl_union_pw_multi_aff_copy(gen->prog->scop->tagger);
+	tagger = isl_union_pw_multi_aff_copy(prog->scop->tagger);
 	domain = isl_union_map_domain(isl_union_map_copy(tagged));
 	tagger = isl_union_pw_multi_aff_intersect_domain(tagger, domain);
 	sched = isl_union_map_preimage_domain_union_pw_multi_aff(sched, tagger);
@@ -4766,25 +2078,25 @@ static __isl_give isl_union_map *remove_local_accesses(struct gpu_gen *gen,
 	local = isl_union_map_apply_range(sched,
 			    isl_union_map_reverse(isl_union_map_copy(sched)));
 	local = isl_union_map_intersect(local,
-			isl_union_map_copy(gen->prog->scop->tagged_dep_flow));
+			isl_union_map_copy(prog->scop->tagged_dep_flow));
 
 	empty = isl_union_map_is_empty(local);
 
-	external = isl_union_map_copy(gen->prog->scop->tagged_dep_flow);
+	external = isl_union_map_copy(prog->scop->tagged_dep_flow);
 	external = isl_union_map_intersect_params(external,
-				isl_set_copy(gen->prog->scop->context));
+				isl_set_copy(prog->scop->context));
 	external = isl_union_map_subtract(external, local);
 
 	if (read) {
 		tag_set = isl_union_map_range(external);
 		external = wrapped_reference_to_access(tag_set, tagged);
 		external = isl_union_map_union(external,
-				isl_union_map_copy(gen->prog->scop->live_in));
+				isl_union_map_copy(prog->scop->live_in));
 	} else {
 		tag_set = isl_union_map_domain(external);
 		external = wrapped_reference_to_access(tag_set, tagged);
 		external = isl_union_map_union(external,
-				isl_union_map_copy(gen->prog->scop->live_out));
+				isl_union_map_copy(prog->scop->live_out));
 	}
 
 	if (empty < 0)
@@ -4797,436 +2109,136 @@ static __isl_give isl_union_map *remove_local_accesses(struct gpu_gen *gen,
 	return access;
 }
 
-/* Given the AST context schedule "schedule" and the mapping from
- * domains to the shared tile loops "shared_sched", add a schedule
- * for copying an array reference group to/from shared/private memory.
- * "read" is set if data should be copied from global memory
- * to shared/private memory.
- * "k" represents the current group
- * "s" is the total number of groups
+/* Given an access relation "access" from "group", remove those reads
+ * if ("read" is 1) or writes (if "read" is 0) that are only needed to
+ * communicate data within the same iteration of the schedule at the
+ * position where the copying of the group is inserted.
+ * "node" points to this position, i.e., the depth at "node"
+ * is equal to group->depth.
  *
- * We schedule an operation before or after the innermost loop
- * of "shared_sched" that affects the tile of the array reference group.
- *
- * schedule is of the form
- *
- *	D -> L
- *
- * (with D the iteration domains and L the already generated loops),
- * while shared_sched is of the form
- *
- *	D -> S
- *
- * We first compute the access relation for the reference group
- *
- *	D -> A
- *
- * and remove from this access relation those reads or writes
- * that only needed to communicate data within the same iteration
- * of the last_shared dimension of the group.
- * We then combine what is left with shared_sched into
- *
- *	D -> [S -> A]
- *
- * If this results in an empty relation, no copying needs to be performed
- * at this point.
- * Otherwise, we invert the relation and combine it with "schedule" into
- *
- *	[S -> A] -> L
- *
- * The actual additional piece of the schedule is obtained from combining
- *
- *	[S -> A] -> S
- *
- * with a mapping
- *
- *	[s_0,...] -> [0,s_{tile_first},0,..., val, 0, 0, ... 0]
- *
- * The position of "val" corresponds to the innermost loop that affects
- * the tile and the value indicates where the copying is scheduled
- * with respect to the actual kernel code (at value 0).
- * Reads are schedule before the code, writes to global memory from
- * private memory are scheduled at values 1 to s, writes to global
- * memory from shared memory are scheduled at values s + 2 to 2 * s + 1.
- *
- * If we are scheduling a read from global memory to shared memory,
- * we insert a synchronization before the kernel code (at the innermost
- * level).
- * If we are scheduling a write to global memory, then we add
- * a synchronization after all writes (at value 2 *s + 2).
- * However, there is no need for a synchronization after the outermost loop.
- * A write to global memory from private memory at the innermost level
- * does not require a synchronization, because it is covered by
- * the synchronization after the kernel inserted by body_schedule.
+ * We extract a schedule that picks out the iterations of the outer
+ * group->depth dimensions and call remove_local_accesses.
  */
-static __isl_give isl_union_map *add_group_schedule(struct gpu_gen *gen,
-	__isl_take isl_union_map *res, __isl_keep isl_union_map *schedule,
-	__isl_keep isl_union_map *shared_sched,
-	struct gpu_array_ref_group *group, int read, int k, int s)
+static __isl_give isl_union_map *remove_local_accesses_group(
+	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
+	__isl_take isl_union_map *access, __isl_keep isl_schedule_node *node,
+	int read)
 {
-	int n;
-	int pos, val;
-	isl_space *space;
-	isl_union_map *access;
-	isl_map *map, *proj, *access_map;
-	isl_id *id;
-
-	access = group_access_relation(group, read, !read);
-	access = remove_local_accesses(gen, group, access, read);
-	access = isl_union_map_range_product(isl_union_map_copy(shared_sched),
-						access);
-
-	if (isl_union_map_is_empty(access)) {
-		isl_union_map_free(access);
-		return res;
-	}
-
-	access = isl_union_map_reverse(access);
-	access = isl_union_map_apply_range(access,
-					    isl_union_map_copy(schedule));
-	access_map = isl_map_from_union_map(access);
-
-	space = isl_space_copy(group->array->space);
-	space = isl_space_from_range(space);
-	space = isl_space_add_dims(space, isl_dim_in, gen->shared_len);
-	map = isl_map_domain_map(isl_map_universe(space));
-
-	space = isl_union_map_get_space(schedule);
-	pos = group->last_shared + 1 - gen->tile_first;
-	assert(pos >= 0);
-	if (read)
-		val = -2 - k;
-	else if (group->private_tile)
-		val = 1 + k;
-	else
-		val = 1 + s + 1 + k;
-	proj = insert_even(gen, space, pos, val);
-	map = isl_map_apply_range(map, proj);
-
-	access_map = isl_map_range_product(access_map, map);
-
-	id = isl_id_alloc(gen->ctx, read ? "read" : "write", group);
-	access_map = isl_map_set_tuple_id(access_map, isl_dim_in, id);
-
-	res = isl_union_map_add_map(res, access_map);
-
-	n = gen->shared_len - gen->tile_first;
-	if (read) {
-		if (!group->private_tile)
-			res = add_sync_schedule(gen, res, schedule,
-						shared_sched, n, -1);
-	} else {
-		if (pos == 0)
-			return res;
-		if (pos == n && group->private_tile)
-			return res;
-		res = add_sync_schedule(gen, res, schedule, shared_sched,
-					pos, 2 * s + 2);
-	}
-
-	return res;
-}
-
-/* Return a schedule for the shared tile loops based on the current
- * AST context schedule.
- *
- * We create a "shared_sched" that maps the domains to the first
- * shared_len dimensions of the computed schedule, project out the
- * first tile_first dimensions (as these are already covered by
- * the host code) and insert "statement-level" dimensions at even
- * positions so that we can schedule copy blocks and synchronization
- * before/after each level.
- *
- * In particular, copy blocks are inserted inside the innermost
- * level that affect the tile.  For the copying to global memory,
- * those from private memory are scheduled before those from shared
- * memory such that synchronization can be inserted between the two
- * at the innermost level.
- * Synchronization is inserted at the innermost level before the
- * actual kernel code if there is any copying from global memory
- * to shared memory.  It is inserted unconditionally at the innermost
- * level after the actual kernel code and the copying to global memory
- * from private memory (if any).  Finally, it is inserted after
- * any copying to global memory, except at the outermost level
- * and at the innermost level if there is no copying from shared
- * memory.  The copying from private memory is covered by the unconditional
- * synchronization at the innermost level.
- */
-static __isl_give isl_union_map *body_schedule(struct gpu_gen *gen,
-	__isl_take isl_union_map *schedule)
-{
-	isl_space *space;
-	isl_union_map *res;
-	isl_union_map *shared_sched;
 	isl_union_map *sched;
-	isl_map *proj, *map;
-	int i, j, k, s;
 
-	shared_sched = isl_union_map_copy(gen->tiled_sched);
-	proj = projection(isl_union_map_get_space(shared_sched),
-				gen->tiled_len, gen->shared_len);
-	shared_sched = isl_union_map_apply_range(shared_sched,
-				isl_union_map_from_map(proj));
-	space = isl_union_map_get_space(shared_sched);
-	proj = insert_even(gen, space, -1, 0);
-	sched = isl_union_map_apply_range(isl_union_map_copy(shared_sched),
-				isl_union_map_from_map(proj));
+	if (isl_union_map_is_empty(access))
+		return access;
 
-	res = isl_union_map_range_product(isl_union_map_copy(schedule), sched);
+	sched = isl_schedule_node_get_prefix_schedule_relation(node);
 
-	s = 0;
-	for (i = 0; i < gen->prog->n_array; ++i)
-		s += gen->prog->array[i].n_group;
-
-	k = 0;
-	for (i = 0; i < gen->prog->n_array; ++i) {
-		struct gpu_array_info *array = &gen->prog->array[i];
-
-		for (j = 0; j < array->n_group; ++j) {
-			struct gpu_array_ref_group *group;
-
-			group = array->groups[j];
-			if (!group->private_tile && !group->shared_tile)
-				continue;
-			res = add_group_schedule(gen, res, schedule,
-						shared_sched, group, 0, k, s);
-			res = add_group_schedule(gen, res, schedule,
-						shared_sched, group, 1, k, s);
-			++k;
-		}
-	}
-
-	res = add_sync_schedule(gen, res, schedule, shared_sched,
-			    gen->shared_len - gen->tile_first, 1 + s);
-
-	isl_union_map_free(shared_sched);
-	isl_union_map_free(schedule);
-
-	return res;
+	return remove_local_accesses(kernel->prog, group, access, sched, read);
 }
 
-/* Generate code for "kernel" in the given "context".
+/* This function is called before the AST generator starts traversing
+ * the schedule subtree of a node with mark "mark".
  *
- * We first generate code for the shared tile loops (T1T, T1P and T2)
- * in a context that includes the block ids.
- * Within each iteration of these loops an additional code generation
- * is performed (within create_kernel_leaf) for the rest of the schedule
- * in a context that includes the thread ids.
+ * If the mark is called "kernel", store the kernel pointer in gen->kernel
+ * for use in at_domain.
  */
-static __isl_give isl_ast_node *generate_kernel(struct gpu_gen *gen,
-	__isl_keep isl_ast_build *build, __isl_keep isl_set *host_domain,
-	__isl_keep isl_multi_pw_aff *grid_size)
-{
-	isl_space *space;
-	isl_set *set;
-	isl_id_list *iterators;
-	isl_union_map *schedule;
-	isl_ast_node *tree;
-	int sched_len;
-
-	schedule = isl_ast_build_get_schedule(build);
-
-	build = isl_ast_build_copy(build);
-	build = isl_ast_build_restrict(build, isl_set_copy(host_domain));
-	space = isl_ast_build_get_schedule_space(build);
-	set = isl_set_universe(isl_space_copy(space));
-	set = add_bounded_parameters_dynamic(set, grid_size,
-						gen->kernel->block_ids);
-	build = isl_ast_build_restrict(build, set);
-
-	schedule = body_schedule(gen, schedule);
-
-	sched_len = 2 * (gen->shared_len - gen->tile_first) + 1;
-
-	build = set_atomic_and_unroll(build, space, sched_len);
-	iterators = ppcg_scop_generate_names(gen->prog->scop, sched_len, "g");
-	build = isl_ast_build_set_iterators(build, iterators);
-	build = isl_ast_build_set_create_leaf(build, &create_kernel_leaf, gen);
-	tree = isl_ast_build_node_from_schedule_map(build, schedule);
-	isl_ast_build_free(build);
-
-	return tree;
-}
-
-/* Attach "id" to the given node.
- */
-static __isl_give isl_ast_node *attach_id(__isl_take isl_ast_node *node,
+static int before_mark(__isl_keep isl_id *mark,
 	__isl_keep isl_ast_build *build, void *user)
 {
-	isl_id *id = user;
+	struct gpu_gen *gen = user;
 
+	if (!mark)
+		return -1;
+	if (!strcmp(isl_id_get_name(mark), "kernel"))
+		gen->kernel = isl_id_get_user(mark);
+	return 0;
+}
+
+/* This function is called after the AST generator has finished traversing
+ * the schedule subtree of a mark node.  "node" points to the corresponding
+ * mark AST node.
+ *
+ * If the mark is called "kernel", then replace "node" by a user node
+ * that "calls" the kernel, representing the launch of the kernel.
+ * The original "node" is stored inside the kernel object so that
+ * it can be used to print the device code.
+ * Note that this assumes that a kernel is only launched once.
+ * Also clear the kernel field of gen.
+ */
+static __isl_give isl_ast_node *after_mark(__isl_take isl_ast_node *node,
+        __isl_keep isl_ast_build *build, void *user)
+{
+	isl_ctx *ctx;
+	isl_id *id;
+	isl_ast_expr *expr;
+	isl_ast_expr_list *list;
+	struct ppcg_kernel *kernel;
+	struct gpu_gen *gen = user;
+
+	ctx = isl_ast_node_get_ctx(node);
+	id = isl_ast_node_mark_get_id(node);
+	if (!id)
+		return isl_ast_node_free(node);
+	if (strcmp(isl_id_get_name(id), "kernel") || !gen->kernel) {
+		isl_id_free(id);
+		return node;
+	}
+	kernel = gen->kernel;
+	gen->kernel = NULL;
+	kernel->space = isl_ast_build_get_schedule_space(build);
+	kernel->tree = isl_ast_node_mark_get_node(node);
+	isl_ast_node_free(node);
+
+	expr = isl_ast_expr_from_id(isl_id_copy(id));
+	list = isl_ast_expr_list_alloc(ctx, 0);
+	expr = isl_ast_expr_call(expr, list);
+	node = isl_ast_node_alloc_user(expr);
 	node = isl_ast_node_set_annotation(node, id);
 
 	return node;
 }
 
-/* Construct an AST node for performing a kernel launch and attach
- * the information about the kernel to that node.
- *
- * The kernel AST has been constructed in the context of the range
- * of "schedule".  In particular, the grid size has been computed
- * in the context.  We therefore still need to make sure that these
- * constraints are expressed in the code.  We do this by creating a schedule
- *
- *	kernel[] -> [S -> []]
- *
- * where S is the schedule domain, i.e., the range of "schedule".
- * The AST generation will then create a single call surrounded by
- * all the condition in "S" that have not been expressed yet.
- *
- * The kernel information is attached to this node in attach_id.
- */
-static __isl_give isl_ast_node *construct_launch(
-	__isl_take isl_ast_build *build, __isl_take isl_union_map *schedule,
-	__isl_take struct ppcg_kernel *kernel)
+static int update_depth(__isl_keep isl_schedule_node *node, void *user)
 {
-	isl_id *id;
-	isl_ctx *ctx;
-	isl_union_set *domain;
-	isl_set *set;
-	isl_map *map;
-	isl_ast_node *node;
+	int *depth = user;
+	int node_depth;
 
-	ctx = isl_ast_build_get_ctx(build);
+	if (isl_schedule_node_get_type(node) != isl_schedule_node_leaf)
+		return 1;
+	node_depth = isl_schedule_node_get_schedule_depth(node);
+	if (node_depth > *depth)
+		*depth = node_depth;
 
-	id = isl_id_alloc(ctx, NULL, kernel);
-	id = isl_id_set_free_user(id, &ppcg_kernel_free);
-
-	domain = isl_union_map_range(schedule);
-	set = isl_set_from_union_set(domain);
-	map = isl_map_from_domain(set);
-	map = isl_map_from_range(isl_map_wrap(map));
-	map = isl_map_set_tuple_name(map, isl_dim_in, "kernel");
-	schedule = isl_union_map_from_map(map);
-
-	build = isl_ast_build_set_at_each_domain(build, &attach_id, id);
-	node = isl_ast_build_node_from_schedule_map(build, schedule);
-	isl_ast_build_free(build);
-
-	return node;
+	return 0;
 }
 
-/* This function is called for each leaf in the AST of the host code.
- * We first specialize the schedule to the site of the leaf, compute
- * the size of shared memory and then construct the body of the host code
- * and the associated kernel.
- *
- * The necessary information for printing the kernel launch is
- * stored in a struct ppcg_kernel and attached to the leaf node
- * created to represent the launch.
+/* Use isl to generate code for both the host and the device
+ * from "schedule".
+ * The device code is marked by "kernel" mark nodes in the schedule tree,
+ * containing a pointer to a ppcg_kernel object.
+ * The returned AST only contains the AST for the host code.
+ * The ASTs for the device code are embedded in ppcg_kernel objects
+ * attached to the leaf nodes that call "kernel".
  */
-static __isl_give isl_ast_node *create_host_leaf(
-	__isl_take isl_ast_build *build, void *user)
-{
-	struct gpu_gen *gen = (struct gpu_gen *) user;
-	isl_id *id;
-	isl_ast_node *node;
-	struct ppcg_kernel *kernel;
-	isl_set *host_domain;
-	isl_union_map *schedule;
-	isl_union_map *local_sched;
-	isl_union_map *access;
-	isl_union_set *domain;
-	int i;
-
-	schedule = isl_ast_build_get_schedule(build);
-
-	isl_union_map_foreach_map(schedule, &extract_tile_len, gen);
-	read_sizes(gen);
-
-	domain = isl_union_map_domain(isl_union_map_copy(schedule));
-
-	local_sched = isl_union_map_copy(gen->sched);
-	local_sched = isl_union_map_intersect_domain(local_sched, domain);
-	access = isl_union_map_union(isl_union_map_copy(gen->prog->read),
-				     isl_union_map_copy(gen->prog->may_write));
-	access = isl_union_map_apply_domain(access,
-					    isl_union_map_copy(local_sched));
-
-	kernel = gen->kernel = isl_calloc_type(gen->ctx, struct ppcg_kernel);
-	if (!kernel)
-		goto error;
-	kernel->block_ids = ppcg_scop_generate_names(gen->prog->scop,
-						gen->n_grid, "b");
-	kernel->thread_ids = ppcg_scop_generate_names(gen->prog->scop,
-						gen->n_block, "t");
-
-	gen->tiled_sched = tile_schedule(gen, local_sched);
-	gen->tiled_sched = parametrize_tiled_schedule(gen, gen->tiled_sched);
-	gen->tiled_sched = scale_tile_loops(gen, gen->tiled_sched);
-
-	gen->local_sched = isl_union_map_copy(gen->tiled_sched);
-	gen->local_sched = thread_tile_schedule(gen, gen->local_sched);
-	gen->local_sched = scale_thread_tile_loops(gen, gen->local_sched);
-
-	kernel->id = gen->kernel_id++;
-	kernel->context = isl_union_map_params(isl_union_map_copy(schedule));
-	kernel->grid_size = extract_grid_size(gen, kernel);
-	extract_block_size(gen, kernel);
-	kernel->arrays = isl_union_map_range(access);
-	kernel->arrays = isl_union_set_apply(kernel->arrays,
-				isl_union_map_copy(gen->prog->to_outer));
-	kernel->space = isl_ast_build_get_schedule_space(build);
-
-	compute_shared_sched(gen);
-	gen->privatization = compute_privatization(gen);
-	check_scalar_live_ranges(gen);
-	if (group_references(gen) < 0)
-		schedule = isl_union_map_free(schedule);
-	host_domain = isl_set_from_union_set(isl_union_map_range(
-						isl_union_map_copy(schedule)));
-	localize_bounds(gen, kernel, host_domain);
-
-	gen->local_sched = interchange_for_unroll(gen, gen->local_sched);
-	check_shared_memory_bound(gen);
-	compute_group_tilings(gen);
-
-	kernel->tree = generate_kernel(gen, build, host_domain,
-					kernel->grid_size);
-	create_kernel_vars(gen, kernel);
-
-	free_local_array_info(gen);
-	isl_map_free(gen->privatization);
-	isl_union_map_free(gen->local_sched);
-	isl_union_map_free(gen->tiled_sched);
-	isl_union_map_free(gen->shared_sched);
-	isl_union_map_free(gen->shared_proj);
-	isl_set_free(host_domain);
-	free(gen->tile_size);
-
-	node = construct_launch(build, schedule, kernel);
-
-	return node;
-error:
-	isl_union_map_free(schedule);
-	return NULL;
-}
-
-/* Use isl to generate code for the outer gen->tile_first loops
- * of the global schedule in gen->sched, resulting in the host code.
- * Within each iteration of this partial schedule, i.e., for each kernel
- * launch, create_host_leaf takes care of generating the kernel code.
- */
-static __isl_give isl_ast_node *generate_host_code(struct gpu_gen *gen)
+static __isl_give isl_ast_node *generate_code(struct gpu_gen *gen,
+	__isl_take isl_schedule *schedule)
 {
 	isl_ast_build *build;
 	isl_ast_node *tree;
-	isl_union_map *sched;
-	isl_map *proj;
 	isl_id_list *iterators;
+	int depth;
 
-	sched = isl_union_map_copy(gen->sched);
-	proj = projection(isl_union_map_get_space(sched),
-			    gen->untiled_len, gen->tile_first);
-	sched = isl_union_map_apply_range(sched, isl_union_map_from_map(proj));
-
-	isl_options_set_ast_build_group_coscheduled(gen->ctx, 1);
-	build = isl_ast_build_from_context(isl_set_copy(gen->prog->context));
-	iterators = ppcg_scop_generate_names(gen->prog->scop,
-						gen->tile_first, "h");
+	depth = 0;
+	if (isl_schedule_foreach_schedule_node(schedule, &update_depth,
+						&depth) < 0)
+		return NULL;
+	build = isl_ast_build_alloc(gen->prog->ctx);
+	iterators = ppcg_scop_generate_names(gen->prog->scop, depth, "c");
 	build = isl_ast_build_set_iterators(build, iterators);
-	build = isl_ast_build_set_create_leaf(build, &create_host_leaf, gen);
-	tree = isl_ast_build_node_from_schedule_map(build, sched);
+	build = isl_ast_build_set_at_each_domain(build, &at_domain, gen);
+	build = isl_ast_build_set_before_each_mark(build, &before_mark, gen);
+	build = isl_ast_build_set_after_each_mark(build, &after_mark, gen);
+	if (gen->prog->scop->options->debug->dump_final_schedule)
+		isl_schedule_dump(schedule);
+	tree = isl_ast_build_node_from_schedule(build, schedule);
 	isl_ast_build_free(build);
 
 	return tree;
@@ -5239,369 +2251,1343 @@ __isl_give isl_union_map *extract_sizes_from_str(isl_ctx *ctx, const char *str)
 	return isl_union_map_read_from_str(ctx, str);
 }
 
-/* Information about the outermost tilable bands in the forest of bands.
- *
- * tile_len and n_parallel are only sets on band_info structures
- * that correspond to outermost bands.  For other bands (in particular,
- * ancestors of the outermost bands), n_parallal is set to 0.
- *
- * prefix is the (padded) schedule leading up to the outermost tilable bands.
- *
- * tile_first is the number of schedule dimensions in prefix.
- *
- * suffix is the schedule of the outermost tilable bands and their descendants.
+/* Can "node" be tiled and then mapped to block and thread identifiers?
+ * That is, is it permutable with at least one coincident dimension?
  */
-struct band_info {
-	struct gpu_gen *gen;
-	int tile_first;
-	int tile_len;
-	int n_parallel;
-	isl_union_map *prefix;
-	isl_union_map *suffix;
-};
-
-/* Set tile_len and n_parallel of the statement to that of
- * their outermost band, recorded in the band_info.
- */
-static int set_stmt_tile_len(__isl_take isl_map *map, void *user)
+static int is_permutable(__isl_keep isl_schedule_node *node)
 {
-	struct band_info *info = user;
-	struct gpu_stmt *stmt;
-	isl_id *id;
+	if (!node)
+		return -1;
 
-	id = isl_map_get_tuple_id(map, isl_dim_in);
-	stmt = find_stmt(info->gen->prog, id);
-	isl_id_free(id);
+	if (isl_schedule_node_get_type(node) != isl_schedule_node_band)
+		return 0;
+	if (!isl_schedule_node_band_get_permutable(node))
+		return 0;
+	if (isl_schedule_node_band_n_member(node) < 1)
+		return 0;
+	if (!isl_schedule_node_band_member_get_coincident(node, 0))
+		return 0;
 
-	stmt->tile_len = info->tile_len;
-	stmt->n_parallel = info->n_parallel;
+	return 1;
+}
 
-	isl_map_free(map);
+/* A isl_schedule_foreach_schedule_node callback
+ * for setting *any_permutable and aborting the search
+ * if "node" is a permutable band with coincident dimensions.
+ * Otherwise, continue searching.
+ */
+static int set_permutable(__isl_keep isl_schedule_node *node, void *user)
+{
+	int *any_permutable = user;
+	int permutable;
+
+	permutable = is_permutable(node);
+	if (permutable < 0)
+		return -1;
+	if (!permutable)
+		return 1;
+
+	*any_permutable = 1;
+
+	return -1;
+}
+
+/* Does "schedule" contain any permutable band with at least one coincident
+ * member?
+ */
+static int has_any_permutable_node(__isl_keep isl_schedule *schedule)
+{
+	int any_permutable = 0;
+
+	if (isl_schedule_foreach_schedule_node(schedule, &set_permutable,
+						&any_permutable) < 0 &&
+	    !any_permutable)
+		return -1;
+
+	return any_permutable;
+}
+
+/* Is "node" a leaf or can it be tiled and then mapped to
+ * block and thread identifiers?
+ */
+static int is_leaf_or_tilable(__isl_keep isl_schedule_node *node)
+{
+	if (isl_schedule_node_get_type(node) == isl_schedule_node_leaf)
+		return 1;
+	return is_permutable(node);
+}
+
+/* Is "node" the outermost node in its branch that can be tiled
+ * and then mapped to block and thread identifiers?
+ * If there are no such nodes in the branch and if "node" is a leaf,
+ * then it is accepted too.
+ */
+static int is_outer_tilable(__isl_keep isl_schedule_node *node)
+{
+	int tilable;
+	isl_schedule_node *ancestor;
+
+	tilable = is_leaf_or_tilable(node);
+	if (tilable < 0)
+		return -1;
+	if (!tilable)
+		return 0;
+
+	tilable = 0;
+	ancestor = isl_schedule_node_copy(node);
+	while (isl_schedule_node_has_parent(ancestor)) {
+		ancestor = isl_schedule_node_parent(ancestor);
+
+		tilable = is_permutable(ancestor);
+		if (tilable < 0 || tilable)
+			break;
+	}
+
+	isl_schedule_node_free(ancestor);
+	return tilable < 0 ? -1 : !tilable;
+}
+
+/* Construct an isl_multi_val for use as tile sizes for tiling "node"
+ * from the elements in "tile_size".
+ */
+static __isl_give isl_multi_val *construct_band_tiles_sizes(
+	__isl_keep isl_schedule_node *node, int *tile_size)
+{
+	int i, n;
+	isl_ctx *ctx;
+	isl_space *space;
+	isl_multi_val *mv;
+
+	if (!node)
+		return NULL;
+
+	ctx = isl_schedule_node_get_ctx(node);
+	space = isl_schedule_node_band_get_space(node);
+	n = isl_schedule_node_band_n_member(node);
+	mv = isl_multi_val_zero(space);
+	for (i = 0; i < n; ++i) {
+		isl_val *v;
+
+		v = isl_val_int_from_si(ctx, tile_size[i]);
+		mv = isl_multi_val_set_val(mv, i, v);
+	}
+
+	return mv;
+}
+
+/* Replace the partial schedule S of the band node "node" by
+ *
+ *	floor(S/f)
+ *
+ * or
+ *
+ *	f * floor(S/f)
+ *
+ * if scale_tile_loops is set, with f the integers in "factor".
+ * The list that "factor" points to is assumed to contain at least
+ * as many elements as the number of members in the band.
+ */
+static __isl_give isl_schedule_node *snap_band_to_sizes(
+	__isl_take isl_schedule_node *node, int *factor,
+	struct ppcg_options *options)
+{
+	isl_multi_val *mv;
+
+	mv = construct_band_tiles_sizes(node, factor);
+	node = isl_schedule_node_band_scale_down(node, isl_multi_val_copy(mv));
+	if (options->scale_tile_loops)
+		node = isl_schedule_node_band_scale(node,
+							isl_multi_val_copy(mv));
+	isl_multi_val_free(mv);
+
+	return node;
+}
+
+/* Tile "band" with tile size specified by "sizes".
+ *
+ * Since the tile loops will be mapped to block ids, we forcibly
+ * turn off tile loop scaling.  We may want to enable tile loop scaling
+ * at some later point, but then we would have to support the detection
+ * of strides during the mapping to block ids.
+ * Similarly, since the point loops will be mapped to thread ids,
+ * we forcibly shift the point loops so that they start at zero.
+ */
+static __isl_give isl_schedule_node *tile_band(
+	__isl_take isl_schedule_node *node, __isl_take isl_multi_val *sizes)
+{
+	isl_ctx *ctx = isl_schedule_node_get_ctx(node);
+	int scale_tile;
+	int shift_point;
+
+	scale_tile = isl_options_get_tile_scale_tile_loops(ctx);
+	isl_options_set_tile_scale_tile_loops(ctx, 0);
+	shift_point = isl_options_get_tile_shift_point_loops(ctx);
+	isl_options_set_tile_shift_point_loops(ctx, 1);
+
+	node = isl_schedule_node_band_tile(node, sizes);
+
+	isl_options_set_tile_scale_tile_loops(ctx, scale_tile);
+	isl_options_set_tile_shift_point_loops(ctx, shift_point);
+
+	return node;
+}
+
+/* Extract the set of parameter values and outer schedule dimensions
+ * for which any statement instance
+ * in the kernel inserted at "node" needs to be executed.
+ * Intersect the set of parameter values derived from the host schedule
+ * relation with the context of "prog".
+ */
+static __isl_give isl_set *extract_context(__isl_keep isl_schedule_node *node,
+	struct gpu_prog *prog)
+{
+	isl_union_map *schedule;
+	isl_union_set *schedule_domain;
+	isl_set *context;
+	int empty;
+
+	schedule = isl_schedule_node_get_prefix_schedule_relation(node);
+	schedule_domain = isl_union_map_range(schedule);
+	empty = isl_union_set_is_empty(schedule_domain);
+	if (empty < 0) {
+		isl_union_set_free(schedule_domain);
+		return NULL;
+	}
+	if (empty) {
+		int depth;
+		isl_space *space;
+
+		space = isl_union_set_get_space(schedule_domain);
+		isl_union_set_free(schedule_domain);
+		space = isl_space_set_from_params(space);
+		depth = isl_schedule_node_get_schedule_depth(node);
+		space = isl_space_add_dims(space, isl_dim_set, depth);
+		context = isl_set_empty(space);
+	} else {
+		context = isl_set_from_union_set(schedule_domain);
+	}
+	context = isl_set_intersect_params(context,
+					    isl_set_copy(prog->context));
+
+	return context;
+}
+
+/* Return the set of outer array elements accessed by
+ * by the statement instance in "domain" in "prog".
+ */
+static __isl_give isl_union_set *accessed_by_domain(
+	__isl_take isl_union_set *domain, struct gpu_prog *prog)
+{
+	isl_union_map *access;
+	isl_union_set *arrays;
+
+	access = isl_union_map_union(isl_union_map_copy(prog->read),
+				     isl_union_map_copy(prog->may_write));
+	access = isl_union_map_intersect_domain(access, domain);
+	arrays = isl_union_map_range(access);
+	arrays = isl_union_set_apply(arrays,
+				isl_union_map_copy(prog->to_outer));
+
+	return arrays;
+}
+
+/* Return the number of outer band members of the band node "node"
+ * that are marked coincident.
+ */
+static int n_outer_coincidence(__isl_keep isl_schedule_node *node)
+{
+	int i, n;
+
+	n = isl_schedule_node_band_n_member(node);
+
+	for (i = 0; i < n; ++i)
+		if (!isl_schedule_node_band_member_get_coincident(node, i))
+			break;
+
+	return i;
+}
+
+/* If the band node "node" has more than "n" members, then split off
+ * the first "n" of them.
+ */
+static __isl_give isl_schedule_node *split_band(
+	__isl_take isl_schedule_node *node, int n)
+{
+	int dim;
+
+	dim = isl_schedule_node_band_n_member(node);
+	if (n < dim)
+		node = isl_schedule_node_band_split(node, n);
+
+	return node;
+}
+
+/* Scale a band node that may have been split by split_band.
+ * "sizes" are the scaling factors for the original node.
+ * "node" either points to the original band node, or the outer
+ * of the two pieces after splitting.
+ *
+ * If the number of elements in "node" is smaller than the number of
+ * elements in "sizes", then some splitting has occurred and we split
+ * "sizes" in the same way.
+ */
+static __isl_give isl_schedule_node *scale_band(
+	__isl_take isl_schedule_node *node, __isl_take isl_multi_val *sizes)
+{
+	int n, dim;
+
+	n = isl_multi_val_dim(sizes, isl_dim_set);
+	dim = isl_schedule_node_band_n_member(node);
+	if (n > dim) {
+		isl_multi_val *sizes2;
+
+		sizes2 = isl_multi_val_copy(sizes);
+		sizes = isl_multi_val_drop_dims(sizes,
+						isl_dim_set, dim, n - dim);
+		sizes2 = isl_multi_val_drop_dims(sizes2, isl_dim_set, 0, dim);
+		node = isl_schedule_node_child(node, 0);
+		node = isl_schedule_node_band_scale(node, sizes2);
+		node = isl_schedule_node_parent(node);
+	}
+
+	return isl_schedule_node_band_scale(node, sizes);
+}
+
+/* Return an isl_multi_aff, with as elements the parameters in "space"
+ * that have the names specified by the elements in "names".
+ * If (some of) these parameters do not already appear in "space",
+ * then they are added first.
+ */
+static __isl_give isl_multi_aff *parameter_vector(__isl_take isl_space *space,
+	__isl_keep isl_id_list *names)
+{
+	int i, n;
+	isl_local_space *ls;
+	isl_multi_aff *ma;
+
+	if (!names)
+		space = isl_space_free(space);
+
+	n = isl_id_list_n_id(names);
+	for (i = 0; i < n; ++i) {
+		int pos;
+		isl_id *id;
+
+		id = isl_id_list_get_id(names, i);
+		pos = isl_space_find_dim_by_id(space, isl_dim_param, id);
+		if (pos >= 0) {
+			isl_id_free(id);
+			continue;
+		}
+		pos = isl_space_dim(space, isl_dim_param);
+		space = isl_space_add_dims(space, isl_dim_param, 1);
+		space = isl_space_set_dim_id(space, isl_dim_param, pos, id);
+	}
+	ma = isl_multi_aff_zero(isl_space_copy(space));
+	ls = isl_local_space_from_space(isl_space_domain(space));
+	for (i = 0; i < n; ++i) {
+		int pos;
+		isl_id *id;
+		isl_aff *aff;
+
+		id = isl_id_list_get_id(names, i);
+		pos = isl_space_find_dim_by_id(space, isl_dim_param, id);
+		isl_id_free(id);
+		aff = isl_aff_var_on_domain(isl_local_space_copy(ls),
+					    isl_dim_param, pos);
+		ma = isl_multi_aff_set_aff(ma, i, aff);
+	}
+	isl_local_space_free(ls);
+
+	return ma;
+}
+
+/* Return constraints on the domain elements that equate a sequence of
+ * parameters called "names", to the partial schedule
+ * of "node" modulo the integers in "size".
+ * The number of elements in the array "size" should be equal
+ * to the number of elements in "names".
+ * The number of members of the band node "node" should be smaller
+ * than or equal to this number.  If it is smaller, then the first
+ * elements of "names" are equated to zero.
+ */
+static __isl_give isl_union_set *set_schedule_modulo(
+	__isl_keep isl_schedule_node *node, __isl_keep isl_id_list *names,
+	int *size)
+{
+	int n, n_zero;
+	isl_space *space;
+	isl_multi_aff *ma;
+	isl_multi_union_pw_aff *mupa, *mupa2;
+	isl_multi_val *mv;
+	isl_union_set *domain;
+
+	if (!node)
+		return NULL;
+	n = isl_id_list_n_id(names);
+	if (n == 0)
+		return isl_schedule_node_get_universe_domain(node);
+	n_zero = n - isl_schedule_node_band_n_member(node);
+
+	mupa = isl_schedule_node_band_get_partial_schedule(node);
+	mv = construct_band_tiles_sizes(node, size + n_zero);
+	mupa = isl_multi_union_pw_aff_mod_multi_val(mupa, mv);
+
+	space = isl_multi_union_pw_aff_get_space(mupa);
+	space = isl_space_params(space);
+	space = isl_space_set_from_params(space);
+	space = isl_space_add_dims(space, isl_dim_set, n_zero);
+	ma = isl_multi_aff_zero(space);
+
+	domain = isl_schedule_node_get_universe_domain(node);
+	mupa2 = isl_multi_union_pw_aff_multi_aff_on_domain(
+						isl_union_set_copy(domain), ma);
+	mupa = isl_multi_union_pw_aff_range_product(mupa2, mupa);
+
+	space = isl_multi_union_pw_aff_get_space(mupa);
+	ma = parameter_vector(space, names);
+
+	mupa2 = isl_multi_union_pw_aff_multi_aff_on_domain(domain, ma);
+	mupa = isl_multi_union_pw_aff_sub(mupa, mupa2);
+
+	return isl_multi_union_pw_aff_zero_union_set(mupa);
+}
+
+/* Insert a context node at "node" introducing the block and thread
+ * identifiers along with their bounds, which are stored in kernel->grid_size
+ * and kernel->block_dim.
+ * Note that the bounds on the block identifiers may implicitly impose
+ * constraints on the parameters.  A guard needs to be inserted
+ * in the schedule tree to ensure that those bounds hold at "node".
+ * This guard is inserted in insert_guard.
+ */
+static __isl_give isl_schedule_node *insert_context(struct ppcg_kernel *kernel,
+	__isl_take isl_schedule_node *node)
+{
+	isl_set *context;
+
+	context = isl_set_universe(isl_set_get_space(kernel->context));
+
+	context = add_bounded_parameters_dynamic(context,
+					kernel->grid_size, kernel->block_ids);
+	context = add_bounded_parameters(context,
+					kernel->block_dim, kernel->thread_ids);
+
+	node = isl_schedule_node_insert_context(node, context);
+
+	return node;
+}
+
+/* Insert a guard that eliminates kernel launches where the kernel
+ * obviously does not have any work to do.
+ *
+ * In particular, eliminate kernel launches where there are obviously
+ * zero blocks.
+ * Use the same block size constraints that are used to create the context
+ * to ensure that all constraints implicit in the constructed context
+ * are imposed by the guard.
+ *
+ * Additionally, add other constraints that are valid
+ * for each executed instance ("context"), as long as this does not result
+ * in a disjunction.
+ */
+static __isl_give isl_schedule_node *insert_guard(
+	__isl_take isl_schedule_node *node, __isl_keep isl_set *context,
+	__isl_keep isl_multi_pw_aff *size, struct ppcg_scop *scop)
+{
+	unsigned nparam, n;
+	isl_set *guard;
+	isl_id_list *ids;
+
+	guard = isl_set_copy(context);
+	guard = isl_set_compute_divs(guard);
+	guard = isl_set_from_basic_set(isl_set_simple_hull(guard));
+
+	nparam = isl_set_dim(guard, isl_dim_param);
+	n = isl_multi_pw_aff_dim(size, isl_dim_out);
+	ids = ppcg_scop_generate_names(scop, n, "__ppcg_tmp");
+	guard = add_bounded_parameters_dynamic(guard, size, ids);
+	isl_id_list_free(ids);
+	guard = isl_set_project_out(guard, isl_dim_param, nparam, n);
+
+	node = isl_schedule_node_insert_guard(node, guard);
+
+	return node;
+}
+
+/* Does any array reference group mapping require the band that is mapped
+ * to threads to be unrolled?
+ */
+static int kernel_requires_unroll(struct ppcg_kernel *kernel)
+{
+	int i, j;
+
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
+
+		for (j = 0; j < array->n_group; ++j) {
+			struct gpu_array_ref_group *group = array->groups[j];
+			if (gpu_array_ref_group_requires_unroll(group))
+				return 1;
+		}
+	}
 
 	return 0;
 }
 
-static void select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos, struct band_info *info);
-
-/* Check if this band node is tilable and has any parallel loops.  If so,
- * take it as the outermost tilable band.  If not, continue looking for the
- * outermost tilable band in the children of the current band.
+/* Mark the given band node "node" for unrolling by the AST generator and
+ * then sink it to the leaves of the schedule tree.
+ * All dimensions of "node" are assumed to be coincident, such that this
+ * sinking is a valid operation.
  */
-static void band_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos, struct band_info *info)
+static __isl_give isl_schedule_node *unroll(__isl_take isl_schedule_node *node)
 {
-	int n = isl_schedule_node_band_n_member(node);
-	int n_parallel;
+	int i, n;
 
-	for (n_parallel = 0; n_parallel < n; ++n_parallel)
-		if (!isl_schedule_node_band_member_get_coincident(node,
-								n_parallel))
-			break;
+	n = isl_schedule_node_band_n_member(node);
+	for (i = 0; i < n; ++i)
+		node = isl_schedule_node_band_member_set_ast_loop_type(node, i,
+							isl_ast_loop_unroll);
 
-	if (!isl_schedule_node_band_get_permutable(node) || n_parallel == 0) {
-		node = isl_schedule_node_child(node, 0);
-		select_outer_band(gen, node, pos + n, info);
-		return;
+	node = isl_schedule_node_band_sink(node);
+
+	return node;
+}
+
+/* Is there any write in "kernel" that writes directly to global memory?
+ * That is, is there any array reference group that involves a write and
+ * that is not mapped to private or shared memory?
+ */
+static int any_global_write(struct ppcg_kernel *kernel)
+{
+	int i, j;
+
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
+
+		for (j = 0; j < array->n_group; ++j) {
+			struct gpu_array_ref_group *group = array->groups[j];
+
+			if (!group->write)
+				continue;
+			if (group->private_tile || group->shared_tile)
+				continue;
+			return 1;
+		}
 	}
 
-	info->n_parallel = n_parallel;
-	gen->any_parallelism = 1;
-	info->gen = gen;
-	info->tile_first = pos;
-	info->tile_len = n;
-	info->prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
-	info->suffix = isl_schedule_node_get_subtree_schedule_union_map(node);
-	isl_union_map_foreach_map(info->prefix, &set_stmt_tile_len, info);
-
-	isl_schedule_node_free(node);
+	return 0;
 }
 
-/* Comparison function that returns a non-zero value for band_infos
- * with different tile_len fields or different n_parallel fields.
+/* Insert a synchronization node in the schedule tree of "node"
+ * after the core computation of "kernel" at the level of the band
+ * that is mapped to threads, except if that level is equal to
+ * that of the band that is mapped to blocks.
+ * "node" is assumed to point to the kernel node.
  */
-static int cmp_band(const void *p1, const void *p2)
+static __isl_give isl_schedule_node *add_sync(struct ppcg_kernel *kernel,
+	__isl_take isl_schedule_node *node)
 {
-	const struct band_info *info1 = p1;
-	const struct band_info *info2 = p2;
+	int kernel_depth;
 
-	if (info1->tile_len != info2->tile_len)
-		return info1->tile_len - info2->tile_len;
+	kernel_depth = isl_schedule_node_get_schedule_depth(node);
 
-	return info1->n_parallel - info2->n_parallel;
+	node = gpu_tree_move_down_to_thread(node, kernel->core);
+	if (kernel_depth == isl_schedule_node_get_schedule_depth(node))
+		return gpu_tree_move_up_to_kernel(node);
+
+	node = gpu_tree_ensure_following_sync(node, kernel);
+
+	node = gpu_tree_move_up_to_kernel(node);
+
+	return node;
 }
 
-/* Extend "umap" with coordinates with fixed value "val"
- * to a total length of "dst_len", assuming the original dimension is "src_len".
+/* Return a read ("read" is 1) or write access relation for "group"
+ * with those accesses removed that are only needed to communicate data
+ * within the subtree of the schedule rooted at "node".
+ * Furthermore, include the prefix schedule at "node".
+ * That is, return a relation of the form
+ *
+ *	S -> [D -> A]
+ *
+ * with D the outer schedule dimensions at "node".
  */
-static __isl_give isl_union_map *extend_range(
-	__isl_take isl_union_map *umap, int src_len, int dst_len, int val)
+static __isl_give isl_union_map *anchored_non_local_accesses(
+	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
+	__isl_take isl_schedule_node *node, int read)
 {
-	isl_space *dim;
-	isl_map *map;
-	int i;
+	isl_union_map *access;
+	isl_union_map *prefix;
 
-	dim = isl_union_map_get_space(umap);
-	map = isl_map_reverse(projection(dim, dst_len, src_len));
-	for (i = src_len; i < dst_len; ++i)
-		map = isl_map_fix_si(map, isl_dim_out, i, val);
+	access = gpu_array_ref_group_access_relation(group, read, !read);
+	access = remove_local_accesses_group(kernel, group, access, node, read);
+	prefix = isl_schedule_node_get_prefix_schedule_relation(node);
+	access = isl_union_map_range_product(prefix, access);
 
-	umap = isl_union_map_apply_range(umap, isl_union_map_from_map(map));
-
-	return umap;
+	return access;
 }
 
-/* Insert a new dimension at position "pos" in the range of "umap"
- * with fixed value "val", assuming the original dimension of the range
- * of "umap" is "src_len".
+/* Given an array reference group "group", create a mapping
+ *
+ *	read[D -> A] -> [D -> A]
+ *
+ * if "read" is set or
+ *
+ *	write[D -> A] -> [D -> A]
+ *
+ * if "read" is not set.
+ * D corresponds to the outer group->depth dimensions of
+ * the kernel schedule.
  */
-static __isl_give isl_union_map *insert_range(__isl_take isl_union_map *umap,
-	int src_len, int pos, int val)
+static __isl_give isl_multi_aff *create_from_access(isl_ctx *ctx,
+	struct gpu_array_ref_group *group, int read)
 {
 	isl_space *space;
-	isl_map *map;
+	isl_id *id;
 
-	space = isl_union_map_get_space(umap);
-	map = project_out(space, src_len + 1, pos, 1);
-	map = isl_map_reverse(map);
-	map = isl_map_fix_si(map, isl_dim_out, pos, val);
+	space = isl_space_copy(group->array->space);
+	space = isl_space_from_range(space);
+	space = isl_space_add_dims(space, isl_dim_in, group->depth);
+	space = isl_space_wrap(space);
+	space = isl_space_map_from_set(space);
 
-	umap = isl_union_map_apply_range(umap, isl_union_map_from_map(map));
+	id = isl_id_alloc(ctx, read ? "read" : "write", group);
+	space = isl_space_set_tuple_id(space, isl_dim_in, id);
 
-	return umap;
+	return isl_multi_aff_identity(space);
 }
 
-/* Group bands with the same values for tile_len and n_parallel.
- * The prefix schedule is then extended with a fixed coordinate that
- * is different for each such group.
- * Note that the actual values for this coordinate are not important.
- * The bands have already been effectively separated at a higher level
- * or they are independent and may be executed in parallel.
- * The list of band_info has been sorted before this functions is called.
- */
-static void separate_bands(struct band_info *info, int n)
-{
-	int i;
-	int j = 0;
-
-	for (i = 0; i < n; ++i) {
-		int l = info[i].tile_first;
-
-		if (i &&
-		    (info[i].tile_len != info[i - 1].tile_len ||
-		     info[i].n_parallel != info[i - 1].n_parallel))
-			j++;
-
-		info[i].prefix = extend_range(info[i].prefix,
-						l, l + 1, j);
-		info[i].tile_first = l + 1;
-	}
-}
-
-/* Select the outermost bands in the elements of the sequence or set
- * node "node", align their prefix schedules.  Separate all bands
- * if "serialize" is set and otherwise separate bands with different values
- * for tile_len and/or n_parallel.  Finally, combine the resulting
- * prefix and suffix schedules into a single pair of prefix and
- * suffix schedules for the entire list.
- */
-static void list_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos,
-	struct band_info *list_info, int serialize)
-{
-	int i;
-	int n = isl_schedule_node_n_children(node);
-	isl_ctx *ctx = isl_schedule_node_get_ctx(node);
-	struct band_info *info;
-	int max_tile_first;
-	isl_union_map *prefix;
-	isl_union_map *suffix;
-
-	assert(n >= 1);
-	info = isl_calloc_array(ctx, struct band_info, n);
-	assert(info);
-
-	max_tile_first = 0;
-	for (i = 0; i < n; ++i) {
-		isl_schedule_node *child;
-		child = isl_schedule_node_get_child(node, i);
-		select_outer_band(gen, child, pos, &info[i]);
-		if (info[i].tile_first > max_tile_first)
-			max_tile_first = info[i].tile_first;
-	}
-
-	for (i = 0; i < n; ++i) {
-		if (info[i].tile_first == max_tile_first)
-			continue;
-		info[i].prefix = extend_range(info[i].prefix,
-					info[i].tile_first, max_tile_first, 0);
-		info[i].tile_first = max_tile_first;
-	}
-
-	if (serialize) {
-		for (i = 0; i < n; ++i) {
-			int l = info[i].tile_first;
-			info[i].prefix = insert_range(info[i].prefix, l,
-							pos, i);
-			info[i].tile_first = l + 1;
-		}
-	} else {
-		qsort(info, n, sizeof(struct band_info), &cmp_band);
-
-		for (i = 0; i < n - 1; ++i)
-			if (info[i].tile_len != info[i + 1].tile_len ||
-			    info[i].n_parallel != info[i + 1].n_parallel)
-				break;
-
-		if (i < n - 1)
-			separate_bands(info, n);
-	}
-
-	prefix = info[0].prefix;
-	suffix = info[0].suffix;
-
-	for (i = 1; i < n; ++i) {
-		prefix = isl_union_map_union(prefix, info[i].prefix);
-		suffix = isl_union_map_union(suffix, info[i].suffix);
-	}
-
-	list_info->tile_first = info[0].tile_first;
-	list_info->tile_len = -1;
-	list_info->prefix = prefix;
-	list_info->suffix = suffix;
-
-	isl_schedule_node_free(node);
-	free(info);
-}
-
-/* Select the outermost bands in the elements of the set node "node".
- * If the schedule_separate_components is set, then separate all bands.
- */
-static void set_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos,
-	struct band_info *list_info)
-{
-	isl_ctx *ctx = isl_schedule_node_get_ctx(node);
-	int serialize;
-
-	serialize = isl_options_get_schedule_separate_components(ctx);
-	list_select_outer_band(gen, node, pos, list_info, serialize);
-}
-
-/* Select the outermost bands in the elements of the sequence node "node",
- * separating all bands.
- */
-static void sequence_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos,
-	struct band_info *list_info)
-{
-	list_select_outer_band(gen, node, pos, list_info, 1);
-}
-
-/* If we reach a leaf node, then we have not found any outer tilable
- * band with parallel loops, so consider the leaf node as the outermost
- * tilable band.
- */
-static void leaf_select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos, struct band_info *info)
-{
-	info->gen = gen;
-	info->tile_first = pos;
-	info->tile_len = 0;
-	info->prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
-	info->suffix = isl_schedule_node_get_subtree_schedule_union_map(node);
-	isl_union_map_foreach_map(info->prefix, &set_stmt_tile_len, info);
-
-	isl_schedule_node_free(node);
-}
-
-/* Select the outermost tilable band in the subtree that "node" points to.
- */
-static void select_outer_band(struct gpu_gen *gen,
-	__isl_take isl_schedule_node *node, int pos, struct band_info *info)
-{
-	enum isl_schedule_node_type type;
-
-	type = isl_schedule_node_get_type(node);
-	switch (type) {
-	case isl_schedule_node_domain:
-	case isl_schedule_node_filter:
-		node = isl_schedule_node_child(node, 0);
-		select_outer_band(gen, node, pos, info);
-		return;
-	case isl_schedule_node_leaf:
-		leaf_select_outer_band(gen, node, pos, info);
-		return;
-	case isl_schedule_node_band:
-		band_select_outer_band(gen, node, pos, info);
-		return;
-	case isl_schedule_node_set:
-		set_select_outer_band(gen, node, pos, info);
-		return;
-	case isl_schedule_node_sequence:
-		sequence_select_outer_band(gen, node, pos, info);
-		return;
-	default:
-		isl_die(isl_schedule_node_get_ctx(node),
-			isl_error_unsupported, "unhandled schedule node type",
-			node = node);
-	case isl_schedule_node_error:
-		info->prefix = NULL;
-		info->suffix = NULL;
-		break;
-	}
-
-	isl_schedule_node_free(node);
-}
-
-/* Select the outermost tilable band that (by construction)
- * has at least one parallel loop.
- * The starting position of the aligned band is stored in the pair
- * gen->tile_first.
- * The sizes and number of parallel loops may be different in different
- * parts of the band forest and are therefore stored in the gpu_stmts.
+/* Add copy statements to the schedule tree of "node"
+ * for reading from global memory to private memory (if "read" is set) or
+ * for writing back from private memory to global memory
+ * (if "read" is not set) for the array reference group "group" that
+ * is mapped to private memory.
+ * On input, "node" points to the kernel node, and it is moved
+ * back there on output.
  *
- * Return the complete schedule, with the tilable bands aligned
- * at gen->tile_first and padded with zero, if needed.
+ * The copies are performed in the order of the array elements.
+ * The copy statement instances include a reference to the outer
+ * group->depth dimensions of the kernel schedule for ease of
+ * combining them with the group tiling.
+ *
+ * That is, the extra schedule is of the form
+ *
+ *	type[D -> A] -> A
+ *
+ * where D corresponds to the outer group->depth dimensions of
+ * the kernel schedule and A to the global array.
+ * This schedule is unrolled because registers are not addressable.
+ *
+ * The copying is inserted in the schedule tree through an extension
+ * of the form
+ *
+ *	D -> type[D -> A]
+ *
+ * where the extra domain elements type[D -> A] are those accessed
+ * by the group.
+ * A filter is inserted on type[D -> A] to ensure that the element
+ * is read/written by the same thread that needs the element.
+ * This filter is obtained by applying
+ *
+ *	S -> type[D -> A]
+ *
+ * to the thread filter for the core statements.
+ *
+ * The extension is inserted before the core computation in case of a read
+ * and after the core computation in case of a write.
+ * In the latter case, we also make sure that there is a synchronization
+ * node after the write to global memory, unless this write is performed
+ * at the outer level of the kernel.
+ * In principle, this synchronization could be inserted higher
+ * in the schedule tree depending on where the corresponding reads
+ * from global memory are performed.
  */
-static __isl_give isl_union_map *select_outer_tilable_band(struct gpu_gen *gen,
-	__isl_keep isl_schedule *schedule)
+static __isl_give isl_schedule_node *add_copies_group_private(
+	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
+	__isl_take isl_schedule_node *node, int read)
 {
-	isl_schedule_node *node;
-	struct band_info info;
+	isl_union_map *access;
+	isl_union_map *prefix;
+	isl_union_set *domain;
+	isl_space *space;
+	isl_multi_aff *from_access;
+	isl_multi_pw_aff *mpa;
+	isl_multi_union_pw_aff *mupa;
+	isl_schedule_node *graft;
+	isl_union_set *filter;
+	int kernel_depth;
+	int empty;
 
-	gen->n_parallel = 0;
-	gen->tile_len = -1;
+	kernel_depth = isl_schedule_node_get_schedule_depth(node);
+	node = gpu_tree_move_down_to_depth(node, group->depth, kernel->core);
 
-	node = isl_schedule_get_root(schedule);
-	select_outer_band(gen, node, 0, &info);
+	access = anchored_non_local_accesses(kernel, group, node, read);
+	empty = isl_union_map_is_empty(access);
+	if (empty < 0 || empty) {
+		isl_union_map_free(access);
+		if (empty < 0)
+			return isl_schedule_node_free(node);
+		return gpu_tree_move_up_to_kernel(node);
+	}
 
-	gen->tile_first = info.tile_first;
-	info.suffix = align_range(info.suffix);
+	from_access = create_from_access(kernel->ctx, group, read);
+	space = isl_space_domain(isl_multi_aff_get_space(from_access));
+	access = isl_union_map_preimage_range_multi_aff(access, from_access);
 
-	return isl_union_map_flat_range_product(info.prefix, info.suffix);
+	filter = isl_union_set_copy(kernel->thread_filter);
+	filter = isl_union_set_apply(filter, isl_union_map_copy(access));
+	filter = isl_union_set_detect_equalities(filter);
+	filter = isl_union_set_coalesce(filter);
+
+	domain = isl_union_map_range(access);
+	access = isl_union_set_wrapped_domain_map(domain);
+	access = isl_union_map_reverse(access);
+	access = isl_union_map_coalesce(access);
+	graft = isl_schedule_node_from_extension(access);
+
+	space = isl_space_map_from_set(space);
+	mpa = isl_multi_pw_aff_identity(space);
+	mpa = isl_multi_pw_aff_range_factor_range(mpa);
+	mupa = isl_multi_union_pw_aff_from_multi_pw_aff(mpa);
+
+	graft = isl_schedule_node_child(graft, 0);
+	graft = isl_schedule_node_insert_partial_schedule(graft, mupa);
+	graft = unroll(graft);
+
+	graft = isl_schedule_node_insert_filter(graft, filter);
+
+	graft = isl_schedule_node_parent(graft);
+
+	if (read)
+		node = isl_schedule_node_graft_before(node, graft);
+	else {
+		node = isl_schedule_node_graft_after(node, graft);
+		if (kernel_depth < group->depth) {
+			node = isl_schedule_node_parent(node);
+			node = isl_schedule_node_next_sibling(node);
+			node = isl_schedule_node_child(node, 0);
+			node = gpu_tree_ensure_following_sync(node, kernel);
+		}
+	}
+
+	node = gpu_tree_move_up_to_kernel(node);
+
+	return node;
 }
 
-/* Set gen->untiled_len to the number of scheduling dimensions
- * for the schedule of the first domain.
- * We assume here that this number is the same for all domains.
+/* Add copy statements to the schedule tree of "node"
+ * for reading from global memory to shared memory (if "read" is set) or
+ * for writing back from shared memory to global memory
+ * (if "read" is not set) for the array reference group "group" that
+ * is mapped to shared memory.
+ * On input, "node" points to the kernel node, and it is moved
+ * back there on output.
+ *
+ * The copies are performed in the order of the corresponding shared
+ * memory tile.
+ * The copy statement instances include a reference to the outer
+ * group->depth dimensions of the kernel schedule for ease of
+ * combining them with the group tiling.
+ *
+ * If we are performing a read from global memory to shared memory and
+ * if the array involved is not a scalar, then we copy
+ * the entire tile to shared memory.  This may result in some extra
+ * elements getting copied, but it should lead to simpler code
+ * (which means that fewer registers may be needed) and less divergence.
+ *
+ * Otherwise, we only copy the elements that will be read or have been written
+ * in the kernel.
+ *
+ * That is, the extra schedule is of the form
+ *
+ *	type[D -> A] -> T
+ *
+ * where D corresponds to the outer group->depth dimensions of
+ * the kernel schedule, A to the global array and T is the corresponding
+ * shared memory tile.
+ *
+ * The copying is inserted in the schedule tree through an extension
+ * of the form
+ *
+ *	D -> type[D -> A]
+ *
+ * where the extra domain elements type[D -> A] are those accessed
+ * by the group.  In the case of read from a non-scalar, this set
+ * is replaced by the entire shared memory tile.
+ *
+ * A filter is inserted on type[D -> A] to map the copy instances
+ * to the threads.  In particular, the thread identifiers are
+ * equated to the position inside the shared memory tile (T)
+ * modulo the block size.
+ * We try to align the innermost tile dimension with the innermost
+ * thread identifier (x) as a heuristic to improve coalescing.
+ * In particular, if the dimension of the tile is greater than
+ * the dimension of the block, then the schedule mapping to the tile
+ * is broken up into two pieces and the filter is applied to the inner part.
+ * If, on the other hand, the dimension of the tile is smaller than
+ * the dimension of the block, then the initial thread identifiers
+ * are equated to zero and the remaining thread identifiers are
+ * matched to the memory tile.
+ *
+ * The extension is inserted before the core computation in case of a read
+ * and after the core computation in case of a write.
+ * In the case of a read, we first need to make sure there is some
+ * synchronization before the core computation such that we can put the read
+ * from global memory to shared memory before that synchronization.
+ * This ensures that all threads have finished copying into shared memory
+ * before the shared memory is used.
+ * We also need to make sure that there is a synchronization node after
+ * the core computation to ensure that the next load into shared memory
+ * only happens after all data has been used.  There is no need for
+ * this synchronization if we are at the outer level since then there
+ * won't be a next load.
+ * In the case of a write, we need to make sure there is some synchronization
+ * after the core computation such taht we can put the write from shared
+ * memory to global memory after that synchronization.
+ * Unless we are at the outer level, we also need a synchronization node
+ * after the write to ensure the data is saved to global memory
+ * before the next iteration write to the same shared memory.
+ * It also makes sure the data has arrived in global memory before
+ * it is read in a subsequent iteration.
  */
-static int set_untiled_len(__isl_take isl_map *map, void *user)
+static __isl_give isl_schedule_node *add_copies_group_shared(
+	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
+	__isl_take isl_schedule_node *node, int read)
 {
-	unsigned *untiled_len = user;
+	struct gpu_array_tile *tile;
+	isl_union_map *access;
+	isl_union_set *domain;
+	isl_union_set *sync;
+	isl_multi_aff *ma;
+	isl_multi_aff *from_access;
+	isl_multi_pw_aff *mpa;
+	isl_multi_union_pw_aff *mupa;
+	isl_schedule_node *graft;
+	isl_union_set *filter;
+	int skip;
+	int kernel_depth;
+	int empty;
 
-	*untiled_len = isl_map_dim(map, isl_dim_out);
+	kernel_depth = isl_schedule_node_get_schedule_depth(node);
+	node = gpu_tree_move_down_to_depth(node, group->depth, kernel->core);
 
-	isl_map_free(map);
-	return -1;
+	access = anchored_non_local_accesses(kernel, group, node, read);
+	empty = isl_union_map_is_empty(access);
+	if (empty < 0 || empty) {
+		isl_union_map_free(access);
+		if (empty < 0)
+			return isl_schedule_node_free(node);
+		return gpu_tree_move_up_to_kernel(node);
+	}
+
+	from_access = create_from_access(kernel->ctx, group, read);
+
+	tile = gpu_array_ref_group_tile(group);
+	ma = isl_multi_aff_copy(tile->tiling);
+	ma = isl_multi_aff_pullback_multi_aff(ma,
+					    isl_multi_aff_copy(from_access));
+	mpa = isl_multi_pw_aff_from_multi_aff(ma);
+	mupa = isl_multi_union_pw_aff_from_multi_pw_aff(mpa);
+
+	domain = isl_union_map_range(access);
+
+	if (read && !gpu_array_is_scalar(group->array)) {
+		isl_map *map;
+		isl_union_set_free(domain);
+		map = group_tile(group);
+		domain = isl_union_set_from_set(isl_map_wrap(map));
+	}
+
+	domain = isl_union_set_preimage_multi_aff(domain, from_access);
+	access = isl_union_set_wrapped_domain_map(domain);
+	access = isl_union_map_reverse(access);
+	access = isl_union_map_coalesce(access);
+	graft = isl_schedule_node_from_extension(access);
+
+	graft = isl_schedule_node_child(graft, 0);
+
+	graft = isl_schedule_node_insert_partial_schedule(graft, mupa);
+
+	if (tile->n > kernel->n_block && kernel->n_block > 0) {
+		graft = isl_schedule_node_band_split(graft,
+						tile->n - kernel->n_block);
+		graft = isl_schedule_node_child(graft, 0);
+	}
+	if (tile->n < kernel->n_block)
+		skip = kernel->n_block - tile->n;
+	else
+		skip = 0;
+	filter = set_schedule_modulo(graft, kernel->thread_ids,
+					kernel->block_dim);
+	if (!kernel->options->wrap)
+		graft = snap_band_to_sizes(graft, kernel->block_dim + skip,
+			    kernel->options);
+	if (tile->n > kernel->n_block && kernel->n_block > 0)
+		graft = isl_schedule_node_parent(graft);
+	graft = isl_schedule_node_insert_filter(graft, filter);
+
+	while (graft && isl_schedule_node_has_parent(graft))
+		graft = isl_schedule_node_parent(graft);
+
+	if (read) {
+		if (kernel_depth < group->depth)
+			node = gpu_tree_ensure_sync_after_core(node, kernel);
+		node = gpu_tree_move_left_to_sync(node, kernel);
+		node = isl_schedule_node_graft_before(node, graft);
+	} else {
+		node = gpu_tree_move_right_to_sync(node, kernel);
+		node = isl_schedule_node_graft_after(node, graft);
+		node = isl_schedule_node_parent(node);
+		node = isl_schedule_node_next_sibling(node);
+		node = isl_schedule_node_child(node, 0);
+		if (kernel_depth < group->depth)
+			node = gpu_tree_ensure_following_sync(node, kernel);
+	}
+
+	node = gpu_tree_move_up_to_kernel(node);
+
+	return node;
+}
+
+/* Check whether the array reference group "group" is mapped to
+ * private or shared memory and, if so,
+ * add copy statements to the schedule tree of "node"
+ * for reading from global memory to private or shared memory
+ * (if "read" is set) or for writing back from private or shared memory
+ * to global memory (if "read" is not set) for this group.
+ * On input, "node" points to the kernel node, and it is moved
+ * back there on output.
+ */
+static __isl_give isl_schedule_node *add_copies_group(
+	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
+	__isl_take isl_schedule_node *node, int read)
+{
+	if (group->private_tile)
+		return add_copies_group_private(kernel, group, node, read);
+	if (group->shared_tile)
+		return add_copies_group_shared(kernel, group, node, read);
+	return node;
+}
+
+/* For each array reference group that is mapped to private or shared memory,
+ * add copy statements to the schedule tree of "node"
+ * for reading from global memory to private or shared memory
+ * and for writing back.
+ * On input, "node" points to the kernel node, and it is moved
+ * back there on output.
+ */
+static __isl_give isl_schedule_node *add_copies(struct ppcg_kernel *kernel,
+	__isl_take isl_schedule_node *node)
+{
+	int i, j;
+
+	for (i = 0; i < kernel->n_array; ++i) {
+		struct gpu_local_array_info *array = &kernel->array[i];
+
+		for (j = 0; j < array->n_group; ++j) {
+			struct gpu_array_ref_group *group = array->groups[j];
+
+			node = add_copies_group(kernel, group, node, 1);
+			if (!node)
+				return NULL;
+			node = add_copies_group(kernel, group, node, 0);
+			if (!node)
+				return NULL;
+		}
+	}
+
+	return node;
+}
+
+/* Mark all dimensions in the current band node atomic.
+ */
+static __isl_give isl_schedule_node *atomic(__isl_take isl_schedule_node *node)
+{
+	int i, n;
+
+	n = isl_schedule_node_band_n_member(node);
+	for (i = 0; i < n; ++i)
+		node = isl_schedule_node_band_member_set_ast_loop_type(node, i,
+							isl_ast_loop_atomic);
+
+	return node;
+}
+
+/* Mark "node" atomic, if it is a band node.
+ * Do the same for all ancestors.
+ * Return a pointer to "node" (in the updated schedule tree).
+ */
+static __isl_give isl_schedule_node *atomic_ancestors(
+	__isl_take isl_schedule_node *node)
+{
+	int pos;
+
+	if (!node)
+		return NULL;
+	if (!isl_schedule_node_has_parent(node))
+		return node;
+
+	pos = isl_schedule_node_get_child_position(node);
+	node = isl_schedule_node_parent(node);
+	if (isl_schedule_node_get_type(node) == isl_schedule_node_band)
+		node = atomic(node);
+	node = atomic_ancestors(node);
+	node = isl_schedule_node_child(node, pos);
+
+	return node;
+}
+
+/* Group the domain elements into a single space, named kernelX,
+ * with X the kernel sequence number "kernel_id".
+ */
+static __isl_give isl_schedule_node *group_statements(
+	__isl_take isl_schedule_node *node, int kernel_id)
+{
+	char buffer[20];
+	isl_id *id;
+
+	if (!node)
+		return NULL;
+
+	snprintf(buffer, sizeof(buffer), "kernel%d", kernel_id);
+	id = isl_id_alloc(isl_schedule_node_get_ctx(node), buffer, NULL);
+	return isl_schedule_node_group(node, id);
+}
+
+/* Create a ppcg_kernel representing the domain instances that reach "node"
+ * and insert a mark node pointing to the ppcg_kernel before "node".
+ * The band that "node" points to is the band that needs to be mapped
+ * to block identifiers.  The band that needs to be mapped to thread
+ * identifiers should be marked by a "thread" mark by the caller.
+ * This mark is removed by this function.
+ * If "scale" is set, then the band that "node" points to is scaled
+ * by "sizes".
+ *
+ * Mark all outer band nodes as atomic to ensure each kernel is only
+ * scheduled once.
+ * If the domain elements that reach "node" live in more than one space,
+ * then group the domain elements into a single space, named kernelX,
+ * with X the kernel sequence number.
+ *
+ * Insert a guard node governing the kernel node to ensure that
+ * no kernels with zero blocks are launched.
+ *
+ * Insert a context node describing the block and thread
+ * identifiers inside the kernel mark.
+ * The context node needs to be inserted after the effective block size
+ * has been determined such that the bounds on the thread identifiers
+ * would reflect the effective block size.
+ * Insert a filter node inside the context node mapping the statement
+ * instances to block identifiers.  In particular, the block identifiers
+ * are equated to the partial schedule of band that was marked for mapping
+ * to blocks modulo the grid size.
+ * Insert a filter node inside the "thread" mark mapping the statement
+ * instances to thread identifiers.  In particular, the thread identifiers
+ * are equated to the partial schedule of band that was marked for mapping
+ * to threads modulo the block size.
+ *
+ * Compute array reference groups for all arrays, set the local
+ * array bounds based on the set of domain instances that reach
+ * the kernel node, check the total amount of shared memory used
+ * and compute all group tilings.
+ * The array reference groups are computed after the block filter
+ * has been inserted because it affects the mapping to shared or
+ * private memory.  This computation also requires the thread filter
+ * (in the ppcg_kernel object), but this thread filter should not
+ * have been added to the schedule tree yet since the computation
+ * requires the schedule of the band that needs to be mapped to
+ * threads before the privatization is applied.
+ *
+ * If any array reference group requires the band mapped to threads
+ * to be unrolled, then we perform the required unrolling.
+ *
+ * We save a copy of the schedule that may influence the mappings
+ * to shared or private memory in kernel->shared_schedule.
+ *
+ * Finally, we add synchronization and copy statements to the schedule tree,
+ * remove the "thread" mark and create representations for the local
+ * variables in the kernel.
+ *
+ * We keep a copy of the isl_id that points to the kernel to ensure
+ * that the kernel does not get destroyed if the schedule node
+ * is freed due to some error condition.
+ */
+static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node, int scale,
+	__isl_keep isl_multi_val *sizes)
+{
+	struct ppcg_kernel *kernel;
+	isl_id *id;
+	isl_schedule_node *node_thread;
+	isl_union_map *host_schedule;
+	isl_set *host_domain;
+	isl_union_set *domain;
+	int single_statement;
+
+	kernel = isl_calloc_type(gen->ctx, struct ppcg_kernel);
+	kernel = ppcg_kernel_create_local_arrays(kernel, gen->prog);
+	if (!kernel)
+		return isl_schedule_node_free(node);
+
+	domain = isl_schedule_node_get_domain(node);
+	single_statement = isl_union_set_n_set(domain) == 1;
+
+	kernel->ctx = gen->ctx;
+	kernel->prog = gen->prog;
+	kernel->options = gen->options;
+	kernel->context = extract_context(node, gen->prog);
+	kernel->core = isl_union_set_universe(isl_union_set_copy(domain));
+	kernel->arrays = accessed_by_domain(isl_union_set_copy(domain),
+						gen->prog);
+	kernel->n_grid = n_outer_coincidence(node);
+	node_thread = isl_schedule_node_copy(node);
+	node_thread = gpu_tree_move_down_to_thread(node_thread, kernel->core);
+	node_thread = isl_schedule_node_child(node_thread, 0);
+	kernel->n_block = n_outer_coincidence(node_thread);
+	isl_schedule_node_free(node_thread);
+	kernel->id = gen->kernel_id++;
+	read_grid_and_block_sizes(kernel, gen);
+
+	host_schedule = isl_schedule_node_get_prefix_schedule_union_map(node);
+	host_domain = isl_set_from_union_set(isl_union_map_range(
+								host_schedule));
+
+	node = atomic_ancestors(node);
+
+	id = isl_id_alloc(gen->ctx, "kernel", kernel);
+	id = isl_id_set_free_user(id, &ppcg_kernel_free_wrap);
+	node = isl_schedule_node_insert_mark(node, isl_id_copy(id));
+
+	if (!single_statement)
+		node = group_statements(node, kernel->id);
+
+	node = isl_schedule_node_child(node, 0);
+	node = split_band(node, kernel->n_grid);
+	kernel->block_ids = ppcg_scop_generate_names(gen->prog->scop,
+						kernel->n_grid, "b");
+	kernel->block_filter = set_schedule_modulo(node, kernel->block_ids,
+						kernel->grid_dim);
+	kernel->grid_size = extract_grid_size(kernel,
+						isl_union_set_copy(domain));
+	if (!kernel->options->wrap)
+		node = snap_band_to_sizes(node, kernel->grid_dim,
+						kernel->options);
+	if (scale)
+		node = scale_band(node, isl_multi_val_copy(sizes));
+	node = isl_schedule_node_parent(node);
+	if (!single_statement)
+		node = isl_schedule_node_parent(node);
+	node = insert_guard(node, kernel->context, kernel->grid_size,
+				gen->prog->scop);
+	node = gpu_tree_move_down_to_thread(node, kernel->core);
+	node = isl_schedule_node_child(node, 0);
+	node = split_band(node, kernel->n_block);
+	kernel->thread_ids = ppcg_scop_generate_names(gen->prog->scop,
+						kernel->n_block, "t");
+	kernel->thread_filter = set_schedule_modulo(node, kernel->thread_ids,
+						kernel->block_dim);
+	extract_block_size(kernel, domain);
+
+	node = gpu_tree_move_up_to_kernel(node);
+	node = isl_schedule_node_child(node, 0);
+	node = insert_context(kernel, node);
+	node = isl_schedule_node_child(node, 0);
+	node = isl_schedule_node_insert_filter(node,
+				    isl_union_set_copy(kernel->block_filter));
+
+	node = gpu_tree_move_up_to_kernel(node);
+
+	if (gpu_group_references(kernel, node) < 0)
+		node = isl_schedule_node_free(node);
+	localize_bounds(kernel, host_domain);
+	isl_set_free(host_domain);
+
+	check_shared_memory_bound(kernel);
+	compute_group_tilings(kernel);
+
+	node = gpu_tree_move_down_to_thread(node, kernel->core);
+	node = isl_schedule_node_child(node, 0);
+	if (!kernel->options->wrap)
+		node = snap_band_to_sizes(node, kernel->block_dim,
+						kernel->options);
+	node = isl_schedule_node_insert_filter(node,
+				    isl_union_set_copy(kernel->thread_filter));
+	if (kernel_requires_unroll(kernel)) {
+		node = isl_schedule_node_child(node, 0);
+		node = unroll(node);
+	}
+
+	node = gpu_tree_move_up_to_thread(node);
+	kernel->shared_schedule_dim =
+		isl_schedule_node_get_schedule_depth(node);
+	kernel->shared_schedule =
+		isl_schedule_node_get_prefix_schedule_union_pw_multi_aff(node);
+
+	node = gpu_tree_move_up_to_kernel(node);
+
+	if (any_global_write(kernel))
+		node = add_sync(kernel, node);
+	node = add_copies(kernel, node);
+
+	node = gpu_tree_move_down_to_thread(node, kernel->core);
+	node = isl_schedule_node_delete(node);
+
+	node = gpu_tree_move_up_to_kernel(node);
+
+	if (create_kernel_vars(kernel) < 0)
+		node = isl_schedule_node_free(node);
+
+	if (!single_statement)
+		node = isl_schedule_node_parent(node);
+	node = isl_schedule_node_parent(node);
+
+	isl_id_free(id);
+	return node;
+}
+
+/* Insert a zero-dimensional permutable band at "node".
+ */
+static __isl_give isl_schedule_node *insert_empty_permutable_band(
+	__isl_take isl_schedule_node *node)
+{
+	isl_space *space;
+	isl_schedule *schedule;
+	isl_union_set *domain;
+	isl_multi_union_pw_aff *mupa;
+
+	schedule = isl_schedule_node_get_schedule(node);
+	domain = isl_schedule_get_domain(schedule);
+	space = isl_union_set_get_space(domain);
+	isl_union_set_free(domain);
+	isl_schedule_free(schedule);
+
+	space = isl_space_set_from_params(space);
+	mupa = isl_multi_union_pw_aff_zero(space);
+	node = isl_schedule_node_insert_partial_schedule(node, mupa);
+	node = isl_schedule_node_band_set_permutable(node, 1);
+
+	return node;
+}
+
+/* If "node" is the outermost permutable band that can be mapped to block and
+ * thread identifiers in its branch (or a leaf with no such outer bands),
+ * then mark the band as such, attaching a ppcg_kernel to the mark.
+ *
+ * If "node" originally points to a leaf, then insert a zero-dimensional
+ * permutable band such that we can assume that "node" always
+ * points to a band node.
+ *
+ * Tile "node" using user specified tile sizes, after splitting the band
+ * if the number of specified tile sizes is smaller than the dimension
+ * of the band.  Mark the point band of this tiling as the band that
+ * needs to be mapped to threads.
+ * Create a kernel representing the domain instances that reach "node" and
+ * insert a mark node pointing to the ppcg_kernel before the band node.
+ */
+static __isl_give isl_schedule_node *mark_outer_permutable(
+	__isl_take isl_schedule_node *node, void *user)
+{
+	struct gpu_gen *gen = user;
+	int outer;
+	int scale;
+	int tile_len;
+	int *tile_size;
+	isl_id *id;
+	isl_multi_val *sizes;
+
+	outer = is_outer_tilable(node);
+	if (outer < 0)
+		return isl_schedule_node_free(node);
+	if (!outer)
+		return node;
+
+	if (isl_schedule_node_get_type(node) == isl_schedule_node_leaf)
+		node = insert_empty_permutable_band(node);
+
+	tile_len = isl_schedule_node_band_n_member(node);
+	tile_size = read_tile_sizes(gen, &tile_len);
+	if (!tile_size)
+		return isl_schedule_node_free(node);
+	if (tile_len < isl_schedule_node_band_n_member(node))
+		node = isl_schedule_node_band_split(node, tile_len);
+	sizes = construct_band_tiles_sizes(node, tile_size);
+	node = tile_band(node, isl_multi_val_copy(sizes));
+	node = isl_schedule_node_child(node, 0);
+	id = isl_id_alloc(gen->ctx, "thread", NULL);
+	node = isl_schedule_node_insert_mark(node, id);
+	node = isl_schedule_node_parent(node);
+
+	scale = gen->options->scale_tile_loops;
+	node = create_kernel(gen, node, scale, sizes);
+	isl_multi_val_free(sizes);
+	free(tile_size);
+
+	return node;
+}
+
+/* Insert "kernel" marks that point to a ppcg_kernel structure
+ * in front of all outermost tilable band that (by construction)
+ * have at least one parallel loop.
+ */
+static __isl_give isl_schedule_node *mark_kernels(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node)
+{
+	return isl_schedule_node_map_descendant(node,
+						&mark_outer_permutable, gen);
+}
+
+/* Save the schedule "schedule" to a file called "filename".
+ * The schedule is printed in block style.
+ */
+static void save_schedule(__isl_keep isl_schedule *schedule,
+	const char *filename)
+{
+	FILE *file;
+	isl_ctx *ctx;
+	isl_printer *p;
+
+	if (!schedule)
+		return;
+
+	file = fopen(filename, "w");
+	if (!file) {
+		fprintf(stderr, "Unable to open '%s' for writing\n", filename);
+		return;
+	}
+	ctx = isl_schedule_get_ctx(schedule);
+	p = isl_printer_to_file(ctx, file);
+	p = isl_printer_set_yaml_style(p, ISL_YAML_STYLE_BLOCK);
+	p = isl_printer_print_schedule(p, schedule);
+	isl_printer_free(p);
+	fclose(file);
+}
+
+/* Load and return a schedule from a file called "filename".
+ */
+static __isl_give isl_schedule *load_schedule(isl_ctx *ctx,
+	const char *filename)
+{
+	FILE *file;
+	isl_schedule *schedule;
+
+	file = fopen(filename, "r");
+	if (!file) {
+		fprintf(stderr, "Unable to open '%s' for reading\n", filename);
+		return NULL;
+	}
+	schedule = isl_schedule_read_from_file(ctx, file);
+	fclose(file);
+
+	return schedule;
 }
 
 /* Compute an appropriate schedule based on the accesses in
  * gen->read and gen->write.
  *
  * We use the dependences in gen->prog->scop to compute
- * a schedule that has a parallel loop in each tilable band.
- * Finally, we select the outermost tilable band.
+ * a schedule that has a parallel loop in each tilable band and
+ * return this schedule.
  *
  * If live range reordering is allowed, then we need to make sure
  * that live ranges on arrays are not run in parallel since doing
@@ -5629,17 +3615,16 @@ static int set_untiled_len(__isl_take isl_map *map, void *user)
  * as there should be no flow or external false dependence on local
  * variables that can be filtered out.
  */
-static void compute_schedule(struct gpu_gen *gen)
+static __isl_give isl_schedule *compute_schedule(struct gpu_gen *gen)
 {
 	isl_union_set *domain;
 	isl_union_map *dep_raw, *dep;
 	isl_union_map *validity, *proximity, *coincidence;
-	isl_union_map *sched;
 	isl_schedule_constraints *sc;
 	isl_schedule *schedule;
 
 	domain = isl_union_set_copy(gen->prog->scop->domain);
-	sc = isl_schedule_constraints_on_domain(isl_union_set_copy(domain));
+	sc = isl_schedule_constraints_on_domain(domain);
 	sc = isl_schedule_constraints_set_context(sc,
 				isl_set_copy(gen->prog->scop->context));
 	if (gen->options->live_range_reordering) {
@@ -5649,7 +3634,7 @@ static void compute_schedule(struct gpu_gen *gen)
 		proximity = isl_union_map_copy(gen->prog->scop->dep_flow);
 		validity = isl_union_map_copy(proximity);
 		validity = isl_union_map_union(validity,
-			    isl_union_map_copy(gen->prog->scop->dep_external));
+			    isl_union_map_copy(gen->prog->scop->dep_forced));
 		proximity = isl_union_map_union(proximity,
 			    isl_union_map_copy(gen->prog->scop->dep_false));
 		coincidence = isl_union_map_copy(validity);
@@ -5673,16 +3658,30 @@ static void compute_schedule(struct gpu_gen *gen)
 	if (gen->options->debug->dump_schedule_constraints)
 		isl_schedule_constraints_dump(sc);
 	schedule = isl_schedule_constraints_compute_schedule(sc);
+
+	return schedule;
+}
+
+/* Obtain a schedule for the scop, either by reading it from
+ * a file or by computing one.
+ */
+static __isl_give isl_schedule *get_schedule(struct gpu_gen *gen)
+{
+	isl_schedule *schedule;
+
+	if (gen->options->load_schedule_file) {
+		schedule = load_schedule(gen->ctx,
+					gen->options->load_schedule_file);
+	} else {
+		schedule = compute_schedule(gen);
+		if (gen->options->save_schedule_file)
+			save_schedule(schedule,
+					gen->options->save_schedule_file);
+	}
 	if (gen->options->debug->dump_schedule)
 		isl_schedule_dump(schedule);
 
-	sched = select_outer_tilable_band(gen, schedule);
-
-	isl_union_map_foreach_map(sched, &set_untiled_len, &gen->untiled_len);
-	sched = isl_union_map_intersect_domain(sched, domain);
-	gen->sched = sched;
-
-	isl_schedule_free(schedule);
+	return schedule;
 }
 
 /* Compute the sets of outer array elements that need to be copied in and out.
@@ -5794,6 +3793,33 @@ static void compute_copy_in_and_out(struct gpu_gen *gen)
 	gen->prog->copy_in = copy_in;
 }
 
+/* Update "schedule" for mapping to a GPU device.
+ *
+ * In particular, insert a context node and create kernels for
+ * each outermost tilable band.
+ */
+static __isl_give isl_schedule *map_to_device(struct gpu_gen *gen,
+	__isl_take isl_schedule *schedule)
+{
+	isl_schedule_node *node;
+	isl_set *context;
+
+	context = isl_set_copy(gen->prog->context);
+	context = isl_set_from_params(context);
+	schedule = isl_schedule_insert_context(schedule, context);
+
+	node = isl_schedule_get_root(schedule);
+	isl_schedule_free(schedule);
+	node = isl_schedule_node_child(node, 0);
+	if (isl_schedule_node_get_type(node) == isl_schedule_node_context)
+		node = isl_schedule_node_child(node, 0);
+	node = mark_kernels(gen, node);
+	schedule = isl_schedule_node_get_schedule(node);
+	isl_schedule_node_free(node);
+
+	return schedule;
+}
+
 /* Internal data structure for extract_access.
  * "next_access" points to the end of a linked list that is extended
  * by extract_access.
@@ -5902,7 +3928,6 @@ static int extract_access(__isl_keep pet_expr *expr, void *user)
 	access->n_index = isl_multi_pw_aff_dim(index, isl_dim_out);
 	isl_multi_pw_aff_free(index);
 	access->ref_id = pet_expr_access_get_ref_id(expr);
-	access->group = -1;
 	access->tagged_access = extract_single_tagged_access(tagged, expr);
 	access->access = isl_map_copy(access->tagged_access);
 	access->access = isl_map_domain_factor_domain(access->access);
@@ -5983,43 +4008,51 @@ static __isl_give isl_printer *print_gpu(__isl_take isl_printer *p, void *user)
  * cannot be declared inside the body of any possible guard.
  *
  * We first compute a schedule that respects the dependences
- * of the original program and select the outermost band
- * of tilable dimensions that has at least one parallel loop.
- * We then have three blocks of dimensions
+ * of the original program and select the outermost bands
+ * of tilable dimensions that have at least one parallel loop.
+ * If the --load-schedule is specified, then the loaded schedule
+ * is used instead of a computed schedule.
  *
- *	H		B			G
+ * Each of these bands B is then tiled according to "tile" sizes, resulting
+ * in two nested bands, with a kernel marker on top
  *
- * The tilable band "B" is first tiled according to "tile" sizes, resulting
- * in
+ *		K
+ *		|
+ *		T
+ *		|
+ *		P
  *
- *	H	T		P		G
+ * We then split off at most 2 parallel dimensions from the T band and
+ * at most 3 parallel dimension from the P band
  *
- * For each iteration of the T loop and for each array, we compute
+ *		K
+ *		|
+ *		T
+ *		T1
+ *		|
+ *		T2
+ *		|
+ *		P1
+ *		|
+ *		P2
+ *
+ * A filter is introduced in front of T1 that maps the domain instances
+ * to block identifiers.  Similarly, a filter is introduced in front of P1
+ * that maps the domain instances to thread identifiers.
+ *
+ * For each iteration of the T2 band and for each array, we compute
  * the array elements accessed by that iteration, construct a rectangular
  * box around it and shift it to the origin.  The result is used
  * as shared memory for the array.
  *
- * We then split off at most 2 parallel loops from the T loops and
- * at most 3 parallel loops from the P loops
+ * Copying and synchronization statements are added to this schedule tree.
+ * In principle, these are added in front of the P1 band, but some of
+ * them may get hoisted up to higher levels.
  *
- *	H	T1	T2	P1	P2	G
- *
- * The T1/P1 loops are then tiled or "wrapped" over the blocks/threads,
- * according to "grid"/"block" sizes.
- *
- *	H	T1T T1P	T2	P1T P1P	P2	G
- *
- * Finally, the T1P and P1P iterators are equated to the block and
- * thread dimensions respectively and so are effectively removed.
- * The H loops are run on the host.  The T1T, T2, P1T, P2 and G loops
- * are run on the GPU.
- *
- * Code is generated in three stages.  We first generate code for the
- * host (the H loops), with iterators h%d.  Then, for each leaf node
- * of the resulting AST, we generate code for the shared loops (up to
- * and including T2), with iterators g%d and after equating the H loops
- * to h%d parameters and the T1P loops to the block dimensions.
- * Finally, we generate code for the remaining loops in a similar fashion.
+ * The entire AST is then generated from the single resulting schedule tree.
+ * During the generation the subtrees at kernel nodes (K) are saved
+ * aside and replaced by kernel calls.  The result is printed as host code
+ * while the saved subtrees are printed as device code.
  */
 static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	struct gpu_gen *gen, struct ppcg_scop *scop,
@@ -6028,6 +4061,8 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	struct gpu_prog *prog;
 	isl_ctx *ctx;
 	isl_set *context, *guard;
+	isl_schedule *schedule;
+	int any_permutable;
 
 	if (!scop)
 		return isl_printer_free(p);
@@ -6042,25 +4077,28 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	prog->context = isl_set_intersect(prog->context, isl_set_copy(guard));
 
 	gen->prog = prog;
-	gen->any_parallelism = 0;
-	compute_schedule(gen);
+	schedule = get_schedule(gen);
 
-	if (!gen->any_parallelism) {
+	any_permutable = has_any_permutable_node(schedule);
+	if (any_permutable < 0 || !any_permutable) {
 		isl_set_free(context);
 		isl_set_free(guard);
-		p = print_cpu(p, scop, options, gen,
+		if (any_permutable < 0)
+			p = isl_printer_free(p);
+		else
+			p = print_cpu(p, scop, options, gen,
 			isl_ast_print_options_copy(gen->host_print_options),
 			gen->host_print_macros);
+		isl_schedule_free(schedule);
 	} else {
 		compute_copy_in_and_out(gen);
-		gen->tree = generate_host_code(gen);
+		schedule = map_to_device(gen, schedule);
+		gen->tree = generate_code(gen, schedule);
 		p = ppcg_print_exposed_declarations(p, prog->scop);
 		p = ppcg_print_guarded(p, guard, context, &print_gpu, gen,
 			isl_ast_print_options_copy(gen->host_print_options));
 		isl_ast_node_free(gen->tree);
 	}
-
-	isl_union_map_free(gen->sched);
 
 	gpu_prog_free(prog);
 

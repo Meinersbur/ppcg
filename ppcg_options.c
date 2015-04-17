@@ -22,6 +22,8 @@ ISL_ARG_BOOL(struct ppcg_debug_options, dump_schedule_constraints, 0,
 	"dump-schedule-constraints", 0, "dump schedule constraints")
 ISL_ARG_BOOL(struct ppcg_debug_options, dump_schedule, 0,
 	"dump-schedule", 0, "dump isl computed schedule")
+ISL_ARG_BOOL(struct ppcg_debug_options, dump_final_schedule, 0,
+	"dump-final-schedule", 0, "dump PPCG computed schedule")
 ISL_ARG_BOOL(struct ppcg_debug_options, dump_sizes, 0,
 	"dump-sizes", 0,
 	"dump effectively used per kernel tile, grid and block sizes")
@@ -72,4 +74,9 @@ ISL_ARG_BOOL(struct ppcg_options, live_range_reordering, 0,
 	"allow successive live ranges on the same memory element "
 	"to be reordered")
 ISL_ARG_GROUP("opencl", &ppcg_opencl_options_args, "OpenCL options")
+ISL_ARG_STR(struct ppcg_options, save_schedule_file, 0, "save-schedule",
+	"file", NULL, "save isl computed schedule to <file>")
+ISL_ARG_STR(struct ppcg_options, load_schedule_file, 0, "load-schedule",
+	"file", NULL, "load schedule from <file>, "
+	"using it instead of an isl computed schedule")
 ISL_ARGS_END

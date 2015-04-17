@@ -8,8 +8,6 @@
 #include "ppcg_options.h"
 
 /* Represents an outer array possibly accessed by a gpu_prog.
- * If this outer array contains structures, then the references are not
- * collected and the reference groups are not computed.
  */
 struct gpu_array_info {
 	/* The array data space. */
@@ -31,10 +29,6 @@ struct gpu_array_info {
 	int n_ref;
 	struct gpu_stmt_access **refs;
 
-	/* The reference groups associated to this array. */
-	int n_group;
-	struct gpu_array_ref_group **groups;
-
 	/* Is this array accessed at all by the program? */
 	int accessed;
 
@@ -55,14 +49,29 @@ struct gpu_array_info {
 	 * It is set to NULL otherwise.
 	 */
 	isl_union_map *dep_order;
-	/* Should the array (scalar) be forcibly mapped to a register? */
-	int force_private;
 };
 
-/* For each index i with 0 <= i < n_index,
+/* Represents an outer array accessed by a ppcg_kernel, localized
+ * to the context of this kernel.
+ *
+ * "array" points to the corresponding array in the gpu_prog.
+ * The "n_group" "groups" are the reference groups associated to the array.
+ * If the outer array represented by the gpu_local_array_info
+ * contains structures, then the references are not
+ * collected and the reference groups are not computed.
+ * If "force_private" is set, then the array (in practice a scalar)
+ * must be mapped to a register.
+ * For each index i with 0 <= i < n_index,
  * bound[i] is equal to array->bound[i] specialized to the current kernel.
  */
 struct gpu_local_array_info {
+	struct gpu_array_info *array;
+
+	int n_group;
+	struct gpu_array_ref_group **groups;
+
+	int force_private;
+
 	unsigned n_index;
 	isl_pw_aff_list *bound;
 };
@@ -127,6 +136,35 @@ struct gpu_prog {
 
 	int n_array;
 	struct gpu_array_info *array;
+};
+
+struct gpu_gen {
+	isl_ctx *ctx;
+	struct ppcg_options *options;
+
+	/* Callback for printing of AST in appropriate format. */
+	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
+		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
+		struct gpu_types *types, void *user);
+	void *print_user;
+
+	struct gpu_prog *prog;
+	/* The generated AST. */
+	isl_ast_node *tree;
+
+	/* The sequence of types for which a definition has been printed. */
+	struct gpu_types types;
+
+	/* User specified tile, grid and block sizes for each kernel */
+	isl_union_map *sizes;
+
+	/* Effectively used tile, grid and block sizes for each kernel */
+	isl_union_map *used_sizes;
+
+	/* Identifier of the next kernel. */
+	int kernel_id;
+	/* Pointer to the current kernel. */
+	struct ppcg_kernel *kernel;
 };
 
 enum ppcg_kernel_access_type {
@@ -196,18 +234,34 @@ struct ppcg_kernel_var {
 
 /* Representation of a kernel.
  *
+ * prog describes the original code from which the kernel is extracted.
+ *
  * id is the sequence number of the kernel.
  *
  * block_ids contains the list of block identifiers for this kernel.
  * thread_ids contains the list of thread identifiers for this kernel.
  *
- * the first n_block elements of block_dim represent the effective size
- * of the block.
+ * the first n_grid elements of grid_dim represent the specified size
+ * of the grid.
+ * the first n_block elements of block_dim represent the specified or
+ * effective size of the block.
+ * Note that in the input file, the sizes of the grid and the blocks
+ * are specified in the order x, y, z, but internally, the sizes
+ * are stored in reverse order, so that the last element always
+ * refers to the x dimension.
  *
  * grid_size reflects the effective grid size.
  *
- * context is a parametric set containing the values of the parameters
- * for which this kernel may be run.
+ * context contains the values of the parameters and outer schedule dimensions
+ * for which any statement instance in this kernel needs to be executed.
+ *
+ * n_sync is the number of synchronization operations that have
+ * been introduced in the schedule tree corresponding to this kernel (so far).
+ *
+ * core contains the spaces of the statement domains that form
+ * the core computation of the kernel.  It is used to navigate
+ * the tree during the construction of the device part of the schedule
+ * tree in create_kernel.
  *
  * arrays is the set of possibly accessed outer array elements.
  *
@@ -219,19 +273,45 @@ struct ppcg_kernel_var {
  * array contains information about each array that is local
  * to the current kernel.  If an array is not used in a kernel,
  * then the corresponding entry does not contain any information.
+ *
+ * any_force_private is set if any array in the kernel is marked force_private
+ *
+ * block_filter contains constraints on the domain elements in the kernel
+ * that encode the mapping to block identifiers, where the block identifiers
+ * are represented by "n_grid" parameters with as names the elements
+ * of "block_ids".
+ *
+ * thread_filter contains constraints on the domain elements in the kernel
+ * that encode the mapping to thread identifiers, where the thread identifiers
+ * are represented by "n_block" parameters with as names the elements
+ * of "thread_ids".
+ *
+ * shared_schedule corresponds to the schedule dimensions of
+ * the (tiled) schedule for this kernel that have been taken into account
+ * for computing private/shared memory tiles.
+ * shared_schedule_dim is the dimension of this schedule.
  */
 struct ppcg_kernel {
+	isl_ctx *ctx;
+	struct ppcg_options *options;
+
+	struct gpu_prog *prog;
+
 	int id;
 
 	isl_id_list *block_ids;
 	isl_id_list *thread_ids;
 
+	int n_grid;
 	int n_block;
+	int grid_dim[2];
 	int block_dim[3];
 
 	isl_multi_pw_aff *grid_size;
 	isl_set *context;
 
+	int n_sync;
+	isl_union_set *core;
 	isl_union_set *arrays;
 
 	isl_space *space;
@@ -241,6 +321,13 @@ struct ppcg_kernel {
 
 	int n_var;
 	struct ppcg_kernel_var *var;
+
+	int any_force_private;
+
+	isl_union_set *block_filter;
+	isl_union_set *thread_filter;
+	isl_union_pw_multi_aff *shared_schedule;
+	int shared_schedule_dim;
 
 	isl_ast_node *tree;
 };
