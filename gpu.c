@@ -202,7 +202,7 @@ struct gpu_gen {
 	 * are stored in reverse order, so that the last element always
 	 * refers to the x dimension.
 	 */
-	int grid_dim[2];
+	int grid_dim[3];
 	int block_dim[3];
 	int *tile_size;
 };
@@ -838,14 +838,19 @@ static void read_grid_sizes(struct gpu_gen *gen)
 	int n = gen->n_parallel;
 	isl_set *size;
 
-	gen->n_grid = (n <= 2) ? n : 2;
+	gen->n_grid = (n <= 3) ? n : 3;
 	switch (gen->n_grid) {
 	case 1:
 		gen->grid_dim[0] = 32768;
 		break;
-	default:
+	case 2:
 		gen->grid_dim[0] = 256;
 		gen->grid_dim[1] = 256;
+		break;
+	default:
+		gen->grid_dim[0] = 64;
+		gen->grid_dim[1] = 64;
+		gen->grid_dim[2] = 64;
 		break;
 	}
 
@@ -948,7 +953,7 @@ static __isl_give isl_map *tile(__isl_take isl_space *dim, int len,
 /* Construct a map from a domain of dimensionality "len"
  * to a domain of dimensionality "len" + "wrap_len" that "wraps"
  * the "wrap_len" coordinates starting at "first" according to "wrap_size".
- * In particular, [s_i] -> [s_i, s_i % wrap_size[i]].
+ * In particular, [s_i] -> [s_i, s_i % wrap_size[i]]. // i0 -> [??,g0]
  * To do so, we need extra variables corresponding to [s_i / wrap_size[i]],
  * that are projected out at the end.
  * "dim" prescribes the parameters.
