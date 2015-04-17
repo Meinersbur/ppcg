@@ -17,11 +17,6 @@ struct gpu_stmt_access {
 	/* The number of index expressions specified in the access. */
 	int n_index;
 
-	/* Index of the array reference group this reference belong to.
-	 * -1 if no reference groups have been computed for the array.
-	 */
-	int group;
-
 	/* May access relation */
 	isl_map *access;
 	/* May access relation with as domain a mapping from iteration domain
@@ -38,11 +33,6 @@ struct gpu_stmt {
 	isl_id *id;
 	struct pet_stmt *stmt;
 
-	/* Number of tile dimensions. */
-	int tile_len;
-	/* Number of initial parallel loops among tile dimensions. */
-	int n_parallel;
-
 	/* Linked list of accesses. */
 	struct gpu_stmt_access *accesses;
 };
@@ -51,6 +41,8 @@ __isl_give isl_map *project_out(__isl_take isl_space *dim,
 	int len, int first, int n);
 __isl_give isl_map *projection(__isl_take isl_space *dim,
 	int src_len, int dst_len);
+__isl_give isl_set *parametrization(__isl_take isl_space *space,
+	int len, int first, __isl_keep isl_id_list *names);
 __isl_give isl_set *extend(__isl_take isl_set *set, int dst_len);
 __isl_give isl_union_map *align_range(__isl_take isl_union_map *umap);
 

@@ -50,8 +50,12 @@ int ppcg_extract_base_name(char *name, const char *input);
  *	range are wrapped relations mapping an iteration domain to
  *	a reference identifier.  May be NULL if not computed.
  * "dep_false" represents the potential false (anti and output) dependences.
- * "dep_external" represents the constraints that ensure that all live-in
- *	accesses remain live-in and that all live-out accesses remain live-out.
+ * "dep_forced" represents the validity constraints that should be enforced
+ *	even when live-range reordering is used.
+ *	In particular, these constraints ensure that all live-in
+ *	accesses remain live-in and that all live-out accesses remain live-out
+ *	and that multiple potential sources for the same read are
+ *	executed in the original order.
  * "dep_order"/"tagged_dep_order" represents the order dependences between
  *	the live range intervals in "dep_flow"/"tagged_dep_flow".
  *	It is only used if the live_range_reordering
@@ -91,7 +95,7 @@ struct ppcg_scop {
 	isl_union_map *dep_flow;
 	isl_union_map *tagged_dep_flow;
 	isl_union_map *dep_false;
-	isl_union_map *dep_external;
+	isl_union_map *dep_forced;
 	isl_union_map *dep_order;
 	isl_union_map *tagged_dep_order;
 	isl_schedule *schedule;
