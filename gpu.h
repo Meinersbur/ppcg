@@ -165,6 +165,12 @@ struct gpu_gen {
 	int kernel_id;
 	/* Pointer to the current kernel. */
 	struct ppcg_kernel *kernel;
+
+	/* print options for how to print host code */
+	isl_ast_print_options *host_print_options;
+
+	/* Add preprocessor macros for floord, min, max? */
+	int host_print_macros;
 };
 
 enum ppcg_kernel_access_type {
@@ -304,7 +310,7 @@ struct ppcg_kernel {
 
 	int n_grid;
 	int n_block;
-	int grid_dim[2];
+	int grid_dim[3];
 	int block_dim[3];
 
 	isl_multi_pw_aff *grid_size;

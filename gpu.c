@@ -35,12 +35,6 @@
 
 struct gpu_array_info;
 
-	/* print options for how to print host code */
-	isl_ast_print_options *host_print_options;
-
-	/* Add preprocessor macros for floord, min, max? */
-	int host_print_macros;
-
 /* Collect all references to the given array and store pointers to them
  * in array->refs.
  *
