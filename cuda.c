@@ -122,8 +122,7 @@ static __isl_give isl_printer *copy_array_to_device(__isl_take isl_printer *p,
 		p = isl_printer_print_str(p, "&");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", ");
-
-		p = gpu_array_info_print_size(p, array, NULL, NULL);
+	p = gpu_array_info_print_size(p, array, NULL, NULL);
 	p = isl_printer_print_str(p, ", cudaMemcpyHostToDevice));");
 	p = isl_printer_end_line(p);
 
@@ -146,7 +145,7 @@ static __isl_give isl_printer *copy_array_from_device(
 	p = isl_printer_print_str(p, ", dev_");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", ");
-	p = gpu_array_info_print_size(p, array);
+	p = gpu_array_info_print_size(p, array, NULL, NULL);
 	p = isl_printer_print_str(p, ", cudaMemcpyDeviceToHost));");
 	p = isl_printer_end_line(p);
 
