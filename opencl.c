@@ -326,12 +326,7 @@ static __isl_give isl_printer *opencl_allocate_device_arrays(
 		if (!gpu_array_requires_device_allocation(array))
 			continue;
 
-		space = isl_space_copy(array->space);
-		read_i = isl_union_set_extract_set(prog->copy_in, space);
-		empty = isl_set_plain_is_empty(read_i);
-		isl_set_free(read_i);
-
-		p = allocate_device_array(p, array, !empty, info, build, print_options);
+		p = allocate_device_array(p, array, 1, info, build, print_options);
 	}
 	p = isl_printer_start_line(p);
 	p = isl_printer_end_line(p);
@@ -1113,10 +1108,9 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_as_list(
 /* Copy "array" from the host to the device (to_host = 0) or
  * back from the device to the host (to_host = 1).
  */
-static __isl_give isl_printer *pencil_runtime_copy_array(
-	__isl_take isl_printer *p, struct gpu_array_info *array,
-	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *options,
-	int to_host)
+static __isl_give isl_printer *copy_array(
+	__isl_take isl_printer *p, struct gpu_array_info *array, int to_host,
+	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
 {
 	p = isl_printer_start_line(p);
 	if (to_host)
@@ -1126,7 +1120,7 @@ static __isl_give isl_printer *pencil_runtime_copy_array(
 	p = isl_printer_print_str(p, "(dev_");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", ");
-	p = gpu_array_info_print_size(p, array, build, options);
+	p = gpu_array_info_print_size(p, array, build, print_options);
 	if (gpu_array_is_scalar(array))
 		p = isl_printer_print_str(p, ", &");
 	else
@@ -1146,7 +1140,8 @@ static __isl_give isl_printer *pencil_runtime_copy_array(
  * copy_array_to_device or copy_array_from_device.
  */
 static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
-	__isl_keep isl_ast_node *node, struct gpu_prog *prog)
+	__isl_keep isl_ast_node *node, struct gpu_prog *prog,
+	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
 {
 	isl_ast_expr *expr, *arg;
 	isl_id *id;
@@ -1168,9 +1163,9 @@ static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
 		return isl_printer_free(p);
 
 	if (!prefixcmp(name, "to_device"))
-		return copy_array(p, array, 0);
+		return copy_array(p, array, 0, build, print_options);
 	else
-		return copy_array(p, array, 1);
+		return copy_array(p, array, 1, build, print_options);
 }
 
 /* Print the user statement of the host code to "p".
@@ -1214,22 +1209,28 @@ static __isl_give isl_printer *opencl_print_host_user(
 	struct print_host_user_data_opencl *data;
 	isl_ast_build *build;
 
-	isl_ast_print_options_free(print_options);
-
 	data = (struct print_host_user_data_opencl *) user;
+	build = isl_ast_build_from_context(isl_set_copy(data->prog->context));
 
 	id = isl_ast_node_get_annotation(node);
-	if (!id)
-		return print_to_from_device(p, node, data->prog);
+	if (!id) {
+		p = print_to_from_device(p, node, data->prog, build, print_options);
+		isl_ast_print_options_free(print_options);
+		isl_ast_build_free(build);
+		return p;
+	}
 
 	is_user = !strcmp(isl_id_get_name(id), "user");
 	kernel = is_user ? NULL : isl_id_get_user(id);
 	stmt = is_user ? isl_id_get_user(id) : NULL;
 	isl_id_free(id);
 
-	if (is_user)
-		return ppcg_kernel_print_domain(p, stmt);
-	build = isl_ast_build_from_context(isl_set_copy(data->prog->context));
+	if (is_user) {
+		p = ppcg_kernel_print_domain(p, stmt);
+		isl_ast_print_options_free(print_options);
+		isl_ast_build_free(build);
+		return p;
+	}
 
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "{");
@@ -1302,6 +1303,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 		data->opencl->kprinter, data->opencl->options, build);
 
 	isl_ast_build_free(build);
+	isl_ast_print_options_free(print_options);
 	return p;
 }
 
@@ -1431,16 +1433,12 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 
 	p = gpu_print_local_declarations(p, prog);
 	p = opencl_declare_device_arrays(p, prog, opencl);
-
 	p = pencil_runtime_setup(p, opencl->input, opencl);
-
 	p = opencl_allocate_device_arrays(p, prog, opencl, build, print_options);
-	//p = opencl_copy_arrays_to_device(p, prog, opencl, build, print_options);
 
 	p = opencl_print_host_code(
 		p, prog, tree, opencl, isl_ast_print_options_copy(print_options));
 
-	p = opencl_copy_arrays_from_device(p, prog, opencl, build, print_options);
 	p = opencl_release_device_arrays(p, prog, opencl);
 
 	p = pencil_runtime_release(p);

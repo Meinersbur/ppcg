@@ -80,7 +80,7 @@ run_tests () {
 				-o $prog_opt $DIR/utilities/polybench.c \
 				$CFLAGS $cc_options
 		fi
-		libtool --mode=link $CC -I $DIR/$dir $CPPFLAGS $source_opt -o $prog_opt \
+		./libtool --mode=link $CC -I $DIR/$dir $CPPFLAGS $source_opt -o $prog_opt \
 			$DIR/utilities/polybench.c $CFLAGS $cc_options || exit
 
 		$prog_opt 2> $output_opt
