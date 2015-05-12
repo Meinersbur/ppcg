@@ -62,6 +62,7 @@ static FILE *get_output_file(const char *input, const char *output)
 	const char *ext;
 	const char ppcg_marker[] = ".ppcg";
 	int len;
+	FILE *file;
 
 	len = ppcg_extract_base_name(name, input);
 
@@ -72,7 +73,13 @@ static FILE *get_output_file(const char *input, const char *output)
 	if (!output)
 		output = name;
 
-	return fopen(output, "w");
+	file = fopen(output, "w");
+	if (!file) {
+		fprintf(stderr, "Unable to open '%s' for writing\n", output);
+		return NULL;
+	}
+
+	return file;
 }
 
 /* Data used to annotate for nodes in the ast.
@@ -482,24 +489,6 @@ static __isl_give isl_printer *print_scop(struct ppcg_scop *scop,
 	return p;
 }
 
-/* Does "scop" refer to any arrays that are declared, but not
- * exposed to the code after the scop?
- */
-static int any_hidden_declarations(struct ppcg_scop *scop)
-{
-	int i;
-
-	if (!scop)
-		return 0;
-
-	for (i = 0; i < scop->pet->n_array; ++i)
-		if (scop->pet->arrays[i]->declared &&
-		    !scop->pet->arrays[i]->exposed)
-			return 1;
-
-	return 0;
-}
-
 /* Generate CPU code for the scop "ps" and print the corresponding C code
  * to "p", including variable declarations.
  */
@@ -517,7 +506,7 @@ __isl_give isl_printer *print_cpu(__isl_take isl_printer *p,
 	p = isl_printer_end_line(p);
 
 	p = ppcg_print_exposed_declarations(p, ps);
-	hidden = any_hidden_declarations(ps);
+	hidden = ppcg_scop_any_hidden_declarations(ps);
 	if (hidden) {
 		p = ppcg_start_block(p);
 		p = ppcg_print_hidden_declarations(p, ps);
@@ -554,6 +543,8 @@ int generate_cpu(isl_ctx *ctx, struct ppcg_options *options,
 	int r;
 
 	output_file = get_output_file(input, output);
+	if (!output_file)
+		return -1;
 
 	r = ppcg_transform(ctx, input, output_file, options,
 					&print_cpu_wrap, options);

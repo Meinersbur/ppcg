@@ -40,6 +40,11 @@ struct gpu_array_info {
 
 	/* Is the array local to the scop? */
 	int local;
+	/* Is the array local and should it be declared on the host? */
+	int declare_local;
+
+	/* Is the corresponding global device memory accessed in any way? */
+	int global;
 
 	/* Should the array be linearized? */
 	int linearize;
@@ -56,11 +61,10 @@ struct gpu_array_info {
  *
  * "array" points to the corresponding array in the gpu_prog.
  * The "n_group" "groups" are the reference groups associated to the array.
- * If the outer array represented by the gpu_local_array_info
- * contains structures, then the references are not
- * collected and the reference groups are not computed.
  * If "force_private" is set, then the array (in practice a scalar)
  * must be mapped to a register.
+ * "global" is set if the global device memory corresponding
+ * to this array is accessed by the kernel.
  * For each index i with 0 <= i < n_index,
  * bound[i] is equal to array->bound[i] specialized to the current kernel.
  */
@@ -71,6 +75,7 @@ struct gpu_local_array_info {
 	struct gpu_array_ref_group **groups;
 
 	int force_private;
+	int global;
 
 	unsigned n_index;
 	isl_pw_aff_list *bound;
@@ -112,11 +117,6 @@ struct gpu_prog {
 
 	/* The set of inner array elements that may be preserved. */
 	isl_union_set *may_persist;
-
-	/* Set of outer array elements that need to be copied in. */
-	isl_union_set *copy_in;
-	/* Set of outer array elements that need to be copied out. */
-	isl_union_set *copy_out;
 
 	/* A mapping from all innermost arrays to their outer arrays. */
 	isl_union_map *to_outer;
@@ -163,8 +163,6 @@ struct gpu_gen {
 
 	/* Identifier of the next kernel. */
 	int kernel_id;
-	/* Pointer to the current kernel. */
-	struct ppcg_kernel *kernel;
 
 	/* print options for how to print host code */
 	isl_ast_print_options *host_print_options;
@@ -296,6 +294,10 @@ struct ppcg_kernel_var {
  * the (tiled) schedule for this kernel that have been taken into account
  * for computing private/shared memory tiles.
  * shared_schedule_dim is the dimension of this schedule.
+ *
+ * sync_writes contains write references that require synchronization.
+ * Each reference is represented by a universe set in a space [S[i,j] -> R[]]
+ * with S[i,j] the statement instance space and R[] the array reference.
  */
 struct ppcg_kernel {
 	isl_ctx *ctx;
@@ -335,15 +337,20 @@ struct ppcg_kernel {
 	isl_union_pw_multi_aff *shared_schedule;
 	int shared_schedule_dim;
 
+	isl_union_set *sync_writes;
+
 	isl_ast_node *tree;
 };
 
 int gpu_array_is_scalar(struct gpu_array_info *array);
 int gpu_array_is_read_only_scalar(struct gpu_array_info *array);
+int gpu_array_requires_device_allocation(struct gpu_array_info *array);
 __isl_give isl_set *gpu_array_positive_size_guard(struct gpu_array_info *array);
 
 struct gpu_prog *gpu_prog_alloc(isl_ctx *ctx, struct ppcg_scop *scop);
 void *gpu_prog_free(struct gpu_prog *prog);
+
+int ppcg_kernel_requires_array_argument(struct ppcg_kernel *kernel, int i);
 
 int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	struct ppcg_options *options,
