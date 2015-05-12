@@ -20,6 +20,7 @@
 #include "ppcg.h"
 #include "print.h"
 #include "schedule.h"
+#include "util.h"
 
 #define min(a, b)  (((a) < (b)) ? (a) : (b))
 #define max(a, b)  (((a) > (b)) ? (a) : (b))
@@ -220,9 +221,7 @@ static __isl_give isl_printer *opencl_declare_device_arrays(
 	int i;
 
 	for (i = 0; i < prog->n_array; ++i) {
-		if (gpu_array_is_read_only_scalar(&prog->array[i]))
-			continue;
-		if (!prog->array[i].accessed)
+		if (!gpu_array_requires_device_allocation(&prog->array[i]))
 			continue;
 		p = isl_printer_start_line(p);
 		p = isl_printer_print_str(p, "prl_cl_mem dev_");
@@ -324,9 +323,7 @@ static __isl_give isl_printer *opencl_allocate_device_arrays(
 		isl_set *read_i;
 		int empty;
 
-		if (gpu_array_is_read_only_scalar(array))
-			continue;
-		if (!array->accessed)
+		if (!gpu_array_requires_device_allocation(array))
 			continue;
 
 		space = isl_space_copy(array->space);
@@ -413,14 +410,12 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 	int arg_index = 0;
 
 	for (i = 0; i < prog->n_array; ++i) {
-		isl_set *arr;
-		int empty;
+		int required;
 
-		space = isl_space_copy(prog->array[i].space);
-		arr = isl_union_set_extract_set(kernel->arrays, space);
-		empty = isl_set_plain_is_empty(arr);
-		isl_set_free(arr);
-		if (empty)
+		required = ppcg_kernel_requires_array_argument(kernel, i);
+		if (required < 0)
+			return isl_printer_free(p);
+		if (!required)
 			continue;
 		ro = gpu_array_is_read_only_scalar(&prog->array[i]);
 		opencl_set_kernel_argument(
@@ -471,14 +466,12 @@ static __isl_give isl_printer *opencl_print_kernel_arguments(
 	const char *type;
 
 	for (i = 0; i < prog->n_array; ++i) {
-		isl_set *arr;
-		int empty;
+		int required;
 
-		space = isl_space_copy(prog->array[i].space);
-		arr = isl_union_set_extract_set(kernel->arrays, space);
-		empty = isl_set_plain_is_empty(arr);
-		isl_set_free(arr);
-		if (empty)
+		required = ppcg_kernel_requires_array_argument(kernel, i);
+		if (required < 0)
+			return isl_printer_free(p);
+		if (!required)
 			continue;
 
 		if (!first)
@@ -1144,103 +1137,53 @@ static __isl_give isl_printer *pencil_runtime_copy_array(
 	return p;
 }
 
-struct copy_array_data_opencl {
-	struct opencl_info *opencl;
-	struct gpu_array_info *array;
-	isl_ast_build *build;
-	isl_ast_print_options *print_options;
-};
-
-/* Copy "array" from the host to the device.
- */
-static __isl_give isl_printer *copy_array_to_device(__isl_take isl_printer *p,
-	void *user)
-{
-	struct copy_array_data_opencl *data = user;
-
-	return pencil_runtime_copy_array(
-		p, data->array, data->build, data->print_options, 0);
-}
-
-/* Copy "array" back from the device to the host.
- */
-static __isl_give isl_printer *copy_array_from_device(__isl_take isl_printer *p,
-	void *user)
-{
-	struct copy_array_data_opencl *data = user;
-
-	return pencil_runtime_copy_array(
-		p, data->array, data->build, data->print_options, 1);
-}
-
-/* Copy the "copy" arrays from the host to the device (to_host = 0) or
- * back from the device to the host (to_host = 1).
+/* Print a statement for copying an array to or from the device.
+ * The statement identifier is called "to_device_<array name>" or
+ * "from_device_<array name>" and its user pointer points
+ * to the gpu_array_info of the array that needs to be copied.
  *
- * Only perform the copying for arrays with strictly positive size.
+ * Extract the array from the identifier and call
+ * copy_array_to_device or copy_array_from_device.
  */
-static __isl_give isl_printer *opencl_copy_arrays(__isl_take isl_printer *p,
-	struct gpu_prog *prog, __isl_keep isl_union_set *copy, int to_host,
-	struct opencl_info *info, __isl_keep isl_ast_build *build,
-	__isl_keep isl_ast_print_options *print_options)
+static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
+	__isl_keep isl_ast_node *node, struct gpu_prog *prog)
 {
-	int i;
+	isl_ast_expr *expr, *arg;
+	isl_id *id;
+	const char *name;
+	struct gpu_array_info *array;
 
-	for (i = 0; i < prog->n_array; ++i) {
-		struct gpu_array_info *array = &prog->array[i];
-		struct copy_array_data_opencl copy_data = {
-			info, array, build, print_options};
-		isl_space *space;
-		isl_set *copy_i;
-		isl_set *guard;
-		int empty;
+	expr = isl_ast_node_user_get_expr(node);
+	arg = isl_ast_expr_get_op_arg(expr, 0);
+	id = isl_ast_expr_get_id(arg);
+	name = isl_id_get_name(id);
+	array = isl_id_get_user(id);
+	isl_id_free(id);
+	isl_ast_expr_free(arg);
+	isl_ast_expr_free(expr);
 
-		if (gpu_array_is_read_only_scalar(array))
-			continue;
+	if (!name)
+		array = NULL;
+	if (!array)
+		return isl_printer_free(p);
 
-		space = isl_space_copy(array->space);
-		copy_i = isl_union_set_extract_set(copy, space);
-		empty = isl_set_plain_is_empty(copy_i);
-		isl_set_free(copy_i);
-		if (empty)
-			continue;
-
-		guard = gpu_array_positive_size_guard(array);
-		p = ppcg_print_guarded(p, guard, isl_set_copy(prog->context),
-			to_host ? &copy_array_from_device : &copy_array_to_device,
-			&copy_data, isl_ast_print_options_copy(print_options));
-	}
-
-	p = isl_printer_start_line(p);
-	p = isl_printer_end_line(p);
-	return p;
-}
-
-/* Copy the prog->copy_in arrays from the host to the device.
- */
-static __isl_give isl_printer *opencl_copy_arrays_to_device(
-	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info,
-	__isl_keep isl_ast_build *build,
-	__isl_keep isl_ast_print_options *print_options)
-{
-	return opencl_copy_arrays(
-		p, prog, prog->copy_in, 0, info, build, print_options);
-}
-
-/* Copy the prog->copy_out arrays back from the device to the host.
- */
-static __isl_give isl_printer *opencl_copy_arrays_from_device(
-	__isl_take isl_printer *p, struct gpu_prog *prog, struct opencl_info *info,
-	__isl_keep isl_ast_build *build,
-	__isl_keep isl_ast_print_options *print_options)
-{
-	return opencl_copy_arrays(
-		p, prog, prog->copy_out, 1, info, build, print_options);
+	if (!prefixcmp(name, "to_device"))
+		return copy_array(p, array, 0);
+	else
+		return copy_array(p, array, 1);
 }
 
 /* Print the user statement of the host code to "p".
  *
- * In particular, print a block of statements that defines the grid
- * and the work group and then launches the kernel.
+ * The host code may contain original user statements, kernel launches and
+ * statements that copy data to/from the device.
+ * The original user statements and the kernel launches have
+ * an associated annotation, while the data copy statements do not.
+ * The latter are handled by print_to_from_device.
+ * The annotation on the user statements is called "user".
+ *
+ * In case of a kernel launch, print a block of statements that
+ * defines the grid and the work group and then launches the kernel.
  *
  * A grid is composed of many work groups (blocks), each work group holds
  * many work-items (threads).
@@ -1265,15 +1208,27 @@ static __isl_give isl_printer *opencl_print_host_user(
 	__isl_keep isl_ast_node *node, void *user)
 {
 	isl_id *id;
+	int is_user;
 	struct ppcg_kernel *kernel;
+	struct ppcg_kernel_stmt *stmt;
 	struct print_host_user_data_opencl *data;
 	isl_ast_build *build;
 
-	id = isl_ast_node_get_annotation(node);
-	kernel = isl_id_get_user(id);
-	isl_id_free(id);
+	isl_ast_print_options_free(print_options);
 
 	data = (struct print_host_user_data_opencl *) user;
+
+	id = isl_ast_node_get_annotation(node);
+	if (!id)
+		return print_to_from_device(p, node, data->prog);
+
+	is_user = !strcmp(isl_id_get_name(id), "user");
+	kernel = is_user ? NULL : isl_id_get_user(id);
+	stmt = is_user ? isl_id_get_user(id) : NULL;
+	isl_id_free(id);
+
+	if (is_user)
+		return ppcg_kernel_print_domain(p, stmt);
 	build = isl_ast_build_from_context(isl_set_copy(data->prog->context));
 
 	p = isl_printer_start_line(p);
@@ -1347,8 +1302,6 @@ static __isl_give isl_printer *opencl_print_host_user(
 		data->opencl->kprinter, data->opencl->options, build);
 
 	isl_ast_build_free(build);
-	isl_ast_print_options_free(print_options);
-
 	return p;
 }
 
@@ -1436,9 +1389,7 @@ static __isl_give isl_printer *opencl_release_device_arrays(
 
 	for (i = 0; i < prog->n_array; ++i) {
 		struct gpu_array_info *array = &prog->array[i];
-		if (gpu_array_is_read_only_scalar(array))
-			continue;
-		if (!array->accessed)
+		if (!gpu_array_requires_device_allocation(array))
 			continue;
 
 		p = release_device_array(p, array, info);
@@ -1478,12 +1429,13 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 
 	p = ppcg_start_block(p);
 
+	p = gpu_print_local_declarations(p, prog);
 	p = opencl_declare_device_arrays(p, prog, opencl);
 
 	p = pencil_runtime_setup(p, opencl->input, opencl);
 
 	p = opencl_allocate_device_arrays(p, prog, opencl, build, print_options);
-	p = opencl_copy_arrays_to_device(p, prog, opencl, build, print_options);
+	//p = opencl_copy_arrays_to_device(p, prog, opencl, build, print_options);
 
 	p = opencl_print_host_code(
 		p, prog, tree, opencl, isl_ast_print_options_copy(print_options));

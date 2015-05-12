@@ -1,3 +1,4 @@
+#include <isl/constraint.h>
 #include <isl/ilp.h>
 
 #include "gpu_array_tile.h"
@@ -406,6 +407,7 @@ static int can_tile(__isl_keep isl_map *access, struct gpu_array_tile *tile)
  * privatization lives in the range of thread_sched (i.e., it is
  * of dimension thread_depth + n_thread) and encodes the mapping
  * to thread identifiers (as parameters).
+ * host_sched contains the kernel_depth dimensions of the host schedule.
  * shared_sched contains the first thread_depth dimensions of the
  * kernel schedule.
  * thread_sched contains the first (thread_depth + n_thread) dimensions
@@ -418,6 +420,7 @@ struct gpu_group_data {
 	int thread_depth;
 	int n_thread;
 	isl_set *privatization;
+	isl_union_map *host_sched;
 	isl_union_map *shared_sched;
 	isl_union_map *thread_sched;
 	isl_union_map *full_sched;
@@ -455,10 +458,18 @@ static __isl_give isl_map *next(__isl_take isl_space *domain_dim, int pos)
 	return isl_map_from_basic_map(next);
 }
 
-/* Check if the given access is coalesced.
+/* Check if the given access is coalesced (or if there is no point
+ * in trying to coalesce the access by mapping the array to shared memory).
  * That is, check whether incrementing the dimension that will get
  * wrapped over the last thread index results in incrementing
  * the last array index.
+ *
+ * If no two consecutive array elements are ever accessed by "access",
+ * then mapping the corresponding array to shared memory will not
+ * improve coalescing.  In fact, the copying will likely be performed
+ * by a single thread.  Consider the access as coalesced such that
+ * the caller will not try and map the array to shared memory just
+ * to improve coalescing.
  *
  * This function is only called for access relations without reuse and
  * kernels with at least one thread identifier.
@@ -466,25 +477,39 @@ static __isl_give isl_map *next(__isl_take isl_space *domain_dim, int pos)
 static int access_is_coalesced(struct gpu_group_data *data,
 	__isl_keep isl_union_map *access)
 {
-	isl_space *dim;
+	isl_space *space;
+	isl_set *accessed;
 	isl_map *access_map;
 	isl_map *next_thread_x;
 	isl_map *next_element;
 	isl_map *map;
-	int coalesced;
+	int coalesced, empty;
 
 	access = isl_union_map_copy(access);
 	access = isl_union_map_apply_domain(access,
 				isl_union_map_copy(data->full_sched));
 	access_map = isl_map_from_union_map(access);
 
-	dim = isl_map_get_space(access_map);
-	dim = isl_space_domain(dim);
-	next_thread_x = next(dim, data->thread_depth + data->n_thread - 1);
+	space = isl_map_get_space(access_map);
+	space = isl_space_range(space);
+	next_element = next(space, isl_space_dim(space, isl_dim_set) - 1);
 
-	dim = isl_map_get_space(access_map);
-	dim = isl_space_range(dim);
-	next_element = next(dim, isl_space_dim(dim, isl_dim_set) - 1);
+	accessed = isl_map_range(isl_map_copy(access_map));
+	map = isl_map_copy(next_element);
+	map = isl_map_intersect_domain(map, isl_set_copy(accessed));
+	map = isl_map_intersect_range(map, accessed);
+	empty = isl_map_is_empty(map);
+	isl_map_free(map);
+
+	if (empty < 0 || empty) {
+		isl_map_free(next_element);
+		isl_map_free(access_map);
+		return empty;
+	}
+
+	space = isl_map_get_space(access_map);
+	space = isl_space_domain(space);
+	next_thread_x = next(space, data->thread_depth + data->n_thread - 1);
 
 	map = isl_map_apply_domain(next_thread_x, isl_map_copy(access_map));
 	map = isl_map_apply_range(map, access_map);
@@ -495,6 +520,34 @@ static int access_is_coalesced(struct gpu_group_data *data,
 	isl_map_free(map);
 
 	return coalesced;
+}
+
+/* Replace the host schedule dimensions in the access relation "access"
+ * by parameters, so that they are treated as fixed when checking for reuse
+ * (within a kernel) or whether two consecutive elements are accessed
+ * (within a kernel).
+ */
+static __isl_give isl_union_map *localize_access(struct gpu_group_data *data,
+	__isl_take isl_union_map *access)
+{
+	int n;
+	isl_space *space;
+	isl_set *param;
+	isl_union_map *umap;
+	isl_id_list *ids;
+
+	umap = isl_union_map_copy(data->host_sched);
+	space = isl_union_map_get_space(umap);
+	n = data->kernel_depth;
+	ids = ppcg_scop_generate_names(data->scop, n, "__ppcg_host_");
+	param = parametrization(space, n, 0, ids);
+	isl_id_list_free(ids);
+	umap = isl_union_map_intersect_range(umap,
+						isl_union_set_from_set(param));
+	access = isl_union_map_intersect_domain(access,
+						isl_union_map_domain(umap));
+
+	return access;
 }
 
 /* Given an access relation in terms of at least data->thread_depth initial
@@ -710,6 +763,9 @@ static struct gpu_array_ref_group *join_groups(
 	isl_ctx *ctx;
 	struct gpu_array_ref_group *group;
 
+	if (!group1 || !group2)
+		return NULL;
+
 	ctx = isl_map_get_ctx(group1->access);
 	group = isl_calloc_type(ctx, struct gpu_array_ref_group);
 	if (!group)
@@ -823,6 +879,7 @@ static int check_requires_unroll(struct gpu_group_data *data,
  *
  * We only try to compute a shared memory tile if there is any reuse
  * or if the access is not coalesced.
+ * Reuse and coalescing are checked within the given kernel.
  *
  * For computing a private memory tile, we also require that there is
  * some reuse.  Moreover, we require that the access is private
@@ -865,7 +922,7 @@ static int compute_group_bounds_core(struct ppcg_kernel *kernel,
 	struct gpu_array_ref_group *group, struct gpu_group_data *data)
 {
 	isl_ctx *ctx = isl_space_get_ctx(group->array->space);
-	isl_union_map *access;
+	isl_union_map *access, *local;
 	int n_index = group->array->n_index;
 	int no_reuse, coalesced;
 	isl_map *acc;
@@ -886,11 +943,13 @@ static int compute_group_bounds_core(struct ppcg_kernel *kernel,
 		return 0;
 
 	access = gpu_array_ref_group_access_relation(group, 1, 1);
-	no_reuse = isl_union_map_is_injective(access);
+	local = localize_access(data, isl_union_map_copy(access));
+	no_reuse = isl_union_map_is_injective(local);
 	if (no_reuse < 0)
 		r = -1;
 	if (use_shared && no_reuse)
-		coalesced = access_is_coalesced(data, access);
+		coalesced = access_is_coalesced(data, local);
+	isl_union_map_free(local);
 
 	if (r >= 0 && kernel->options->debug->verbose &&
 	    use_shared && no_reuse && coalesced)
@@ -1169,6 +1228,22 @@ static void set_array_groups(struct gpu_local_array_info *array,
 		groups[i]->nr = i;
 }
 
+/* Combine all groups in "groups" into a single group and return
+ * the new number of groups (1 or 0 if there were no groups to start with).
+ */
+static int join_all_groups(int n, struct gpu_array_ref_group **groups)
+{
+	int i;
+
+	for (i = n - 1; i > 0; --i) {
+		groups[0] = join_groups_and_free(groups[0], groups[i]);
+		groups[i] = NULL;
+		n--;
+	}
+
+	return n;
+}
+
 /* Group array references that should be considered together when
  * deciding whether to access them from private, shared or global memory.
  * Return -1 on error.
@@ -1184,8 +1259,9 @@ static void set_array_groups(struct gpu_local_array_info *array,
  * combination of the two also admits a shared memory tile, we merge
  * the two groups.
  *
- * If the array contains structures, then there is no need to compute
- * reference groups since we do not map such arrays to private or shared
+ * If the array contains structures, then we compute a single
+ * reference group without trying to find any tiles
+ * since we do not map such arrays to private or shared
  * memory.
  */
 static int group_array_references(struct ppcg_kernel *kernel,
@@ -1196,15 +1272,18 @@ static int group_array_references(struct ppcg_kernel *kernel,
 	isl_ctx *ctx = isl_union_map_get_ctx(data->shared_sched);
 	struct gpu_array_ref_group **groups;
 
-	if (local->array->has_compound_element)
-		return 0;
-
 	groups = isl_calloc_array(ctx, struct gpu_array_ref_group *,
 					local->array->n_ref);
 	if (!groups)
 		return -1;
 
 	n = populate_array_references(local, groups, data);
+
+	if (local->array->has_compound_element) {
+		n = join_all_groups(n, groups);
+		set_array_groups(local, n, groups);
+		return 0;
+	}
 
 	n = group_overlapping_writes(kernel, n, groups, data);
 
@@ -1360,6 +1439,7 @@ int gpu_group_references(struct ppcg_kernel *kernel,
 	data.scop = kernel->prog->scop;
 
 	data.kernel_depth = isl_schedule_node_get_schedule_depth(node);
+	data.host_sched = isl_schedule_node_get_prefix_schedule_relation(node);
 
 	node = isl_schedule_node_copy(node);
 	node = gpu_tree_move_down_to_thread(node, kernel->core);
@@ -1389,6 +1469,7 @@ int gpu_group_references(struct ppcg_kernel *kernel,
 			break;
 	}
 
+	isl_union_map_free(data.host_sched);
 	isl_union_map_free(data.shared_sched);
 	isl_union_map_free(data.thread_sched);
 	isl_union_map_free(data.full_sched);

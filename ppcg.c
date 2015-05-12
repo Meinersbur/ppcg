@@ -89,6 +89,24 @@ int ppcg_extract_base_name(char *name, const char *input)
 	return len;
 }
 
+/* Does "scop" refer to any arrays that are declared, but not
+ * exposed to the code after the scop?
+ */
+int ppcg_scop_any_hidden_declarations(struct ppcg_scop *scop)
+{
+	int i;
+
+	if (!scop)
+		return 0;
+
+	for (i = 0; i < scop->pet->n_array; ++i)
+		if (scop->pet->arrays[i]->declared &&
+		    !scop->pet->arrays[i]->exposed)
+			return 1;
+
+	return 0;
+}
+
 /* Collect all variable names that are in use in "scop".
  * In particular, collect all parameters in the context and
  * all the array names.
@@ -373,13 +391,8 @@ static void compute_live_out(struct ppcg_scop *ps)
 	ps->live_out = project_out_tags(exposed);
 }
 
-/* Compute the flow dependences and the live_in accesses and store
- * the results in ps->dep_flow and ps->live_in.
- * A copy of the flow dependences, tagged with the reference tags
- * is stored in ps->tagged_dep_flow.
- *
- * We first compute ps->tagged_dep_flow, i.e., the tagged flow dependences
- * and then project out the tags.
+/* Compute the tagged flow dependences and the live_in accesses and store
+ * the results in ps->tagged_dep_flow and ps->live_in.
  *
  * We allow both the must writes and the must kills to serve as
  * definite sources such that a subsequent read would not depend
@@ -387,11 +400,11 @@ static void compute_live_out(struct ppcg_scop *ps)
  * a must kill as source reflect possibly uninitialized reads.
  * No dependences need to be introduced to protect such reads
  * (other than those imposed by potential flows from may writes
- * that follow the kill).  We therefore those flow dependences.
+ * that follow the kill).  We therefore remove those flow dependences.
  * This is also useful for the dead code elimination, which assumes
  * the flow sources are non-kill instances.
  */
-static void compute_tagged_flow_dep(struct ppcg_scop *ps)
+static void compute_tagged_flow_dep_only(struct ppcg_scop *ps)
 {
 	isl_union_pw_multi_aff *tagger;
 	isl_schedule *schedule;
@@ -420,17 +433,36 @@ static void compute_tagged_flow_dep(struct ppcg_scop *ps)
 	tagged_flow = isl_union_map_subtract_domain(tagged_flow,
 				isl_union_map_domain(kills));
 	ps->tagged_dep_flow = tagged_flow;
-	ps->dep_flow = isl_union_map_copy(ps->tagged_dep_flow);
-	ps->dep_flow = isl_union_map_factor_domain(ps->dep_flow);
 	live_in = isl_union_flow_get_may_no_source(flow);
 	ps->live_in = project_out_tags(live_in);
 	isl_union_flow_free(flow);
 }
 
+/* Compute ps->dep_flow from ps->tagged_dep_flow
+ * by projecting out the reference tags.
+ */
+static void derive_flow_dep_from_tagged_flow_dep(struct ppcg_scop *ps)
+{
+	ps->dep_flow = isl_union_map_copy(ps->tagged_dep_flow);
+	ps->dep_flow = isl_union_map_factor_domain(ps->dep_flow);
+}
+
+/* Compute the flow dependences and the live_in accesses and store
+ * the results in ps->dep_flow and ps->live_in.
+ * A copy of the flow dependences, tagged with the reference tags
+ * is stored in ps->tagged_dep_flow.
+ *
+ * We first compute ps->tagged_dep_flow, i.e., the tagged flow dependences
+ * and then project out the tags.
+ */
+static void compute_tagged_flow_dep(struct ppcg_scop *ps)
+{
+	compute_tagged_flow_dep_only(ps);
+	derive_flow_dep_from_tagged_flow_dep(ps);
+}
+
 /* Compute the order dependences that prevent the potential live ranges
  * from overlapping.
- * "before" contains all pairs of statement iterations where
- * the first is executed before the second according to the original schedule.
  *
  * In particular, construct a union of relations
  *
@@ -460,44 +492,55 @@ static void compute_tagged_flow_dep(struct ppcg_scop *ps)
  * Note that dead code elimination should have removed most of these
  * dead writes, but the dead code elimination may not remove all dead writes,
  * so we need to consider them to be safe.
+ *
+ * The order dependences are computed by computing the "dataflow"
+ * from the above unmatched writes and the reads to the may writes.
+ * The unmatched writes and the reads are treated as may sources
+ * such that they would not kill order dependences from earlier
+ * such writes and reads.
  */
-static void compute_order_dependences(struct ppcg_scop *ps,
-	__isl_take isl_union_map *before)
+static void compute_order_dependences(struct ppcg_scop *ps)
 {
 	isl_union_map *reads;
 	isl_union_map *shared_access;
 	isl_union_set *matched;
 	isl_union_map *unmatched;
-	isl_union_set *domain;
+	isl_union_pw_multi_aff *tagger;
+	isl_schedule *schedule;
+	isl_union_access_info *access;
+	isl_union_flow *flow;
 
+	tagger = isl_union_pw_multi_aff_copy(ps->tagger);
+	schedule = isl_schedule_copy(ps->schedule);
+	schedule = isl_schedule_pullback_union_pw_multi_aff(schedule, tagger);
 	reads = isl_union_map_copy(ps->tagged_reads);
 	matched = isl_union_map_domain(isl_union_map_copy(ps->tagged_dep_flow));
 	unmatched = isl_union_map_copy(ps->tagged_may_writes);
 	unmatched = isl_union_map_subtract_domain(unmatched, matched);
 	reads = isl_union_map_union(reads, unmatched);
-	shared_access = isl_union_map_copy(ps->tagged_may_writes);
-	shared_access = isl_union_map_reverse(shared_access);
-	shared_access = isl_union_map_apply_range(reads, shared_access);
-	shared_access = isl_union_map_zip(shared_access);
-	shared_access = isl_union_map_intersect_domain(shared_access,
-						isl_union_map_wrap(before));
-	domain = isl_union_map_domain(isl_union_map_copy(shared_access));
-	shared_access = isl_union_map_zip(shared_access);
-	ps->dep_order = isl_union_set_unwrap(domain);
-	ps->tagged_dep_order = shared_access;
+	access = isl_union_access_info_from_sink(
+				isl_union_map_copy(ps->tagged_may_writes));
+	access = isl_union_access_info_set_may_source(access, reads);
+	access = isl_union_access_info_set_schedule(access, schedule);
+	flow = isl_union_access_info_compute_flow(access);
+	shared_access = isl_union_flow_get_may_dependence(flow);
+	isl_union_flow_free(flow);
+
+	ps->tagged_dep_order = isl_union_map_copy(shared_access);
+	ps->dep_order = isl_union_map_factor_domain(shared_access);
 }
 
 /* Compute those validity dependences of the program represented by "scop"
  * that should be unconditionally enforced even when live-range reordering
  * is used.
- * "before" contains all pairs of statement iterations where
- * the first is executed before the second according to the original schedule.
  *
  * In particular, compute the external false dependences
  * as well as order dependences between sources with the same sink.
  * The anti-dependences are already taken care of by the order dependences.
  * The external false dependences are only used to ensure that live-in and
  * live-out data is not overwritten by any writes inside the scop.
+ * The independences are removed from the external false dependences,
+ * but not from the order dependences between sources with the same sink.
  *
  * In particular, the reads from live-in data need to precede any
  * later write to the same memory element.
@@ -522,8 +565,7 @@ static void compute_order_dependences(struct ppcg_scop *ps,
  * that may write to the same memory element and compute
  * the order dependences among them.
  */
-static void compute_forced_dependences(struct ppcg_scop *ps,
-	__isl_take isl_union_map *before)
+static void compute_forced_dependences(struct ppcg_scop *ps)
 {
 	isl_union_map *shared_access;
 	isl_union_map *exposed;
@@ -535,18 +577,29 @@ static void compute_forced_dependences(struct ppcg_scop *ps,
 	isl_schedule *schedule;
 
 	exposed = isl_union_map_copy(ps->live_out);
-
-	exposed = isl_union_map_reverse(exposed);
-	shared_access = isl_union_map_copy(ps->may_writes);
-	shared_access = isl_union_map_apply_range(shared_access, exposed);
-
+	schedule = isl_schedule_copy(ps->schedule);
+	access = isl_union_access_info_from_sink(exposed);
+	access = isl_union_access_info_set_may_source(access,
+				isl_union_map_copy(ps->may_writes));
+	access = isl_union_access_info_set_schedule(access, schedule);
+	flow = isl_union_access_info_compute_flow(access);
+	shared_access = isl_union_flow_get_may_dependence(flow);
+	isl_union_flow_free(flow);
 	ps->dep_forced = shared_access;
 
-	live_in = isl_union_map_apply_range(isl_union_map_copy(ps->live_in),
-		    isl_union_map_reverse(isl_union_map_copy(ps->may_writes)));
+	schedule = isl_schedule_copy(ps->schedule);
+	access = isl_union_access_info_from_sink(
+				isl_union_map_copy(ps->may_writes));
+	access = isl_union_access_info_set_may_source(access,
+				isl_union_map_copy(ps->live_in));
+	access = isl_union_access_info_set_schedule(access, schedule);
+	flow = isl_union_access_info_compute_flow(access);
+	live_in = isl_union_flow_get_may_dependence(flow);
+	isl_union_flow_free(flow);
 
 	ps->dep_forced = isl_union_map_union(ps->dep_forced, live_in);
-	ps->dep_forced = isl_union_map_intersect(ps->dep_forced, before);
+	ps->dep_forced = isl_union_map_subtract(ps->dep_forced,
+				isl_union_map_copy(ps->independence));
 
 	schedule = isl_schedule_copy(ps->schedule);
 	sink_access = isl_union_map_copy(ps->tagged_dep_flow);
@@ -563,24 +616,49 @@ static void compute_forced_dependences(struct ppcg_scop *ps,
 	ps->dep_forced = isl_union_map_union(ps->dep_forced, shared_sink);
 }
 
+/* Remove independence from the tagged flow dependences.
+ * Since the user has guaranteed that source and sink of an independence
+ * can be executed in any order, there cannot be a flow dependence
+ * between them, so they can be removed from the set of flow dependences.
+ * However, if the source of such a flow dependence is a must write,
+ * then it may have killed other potential sources, which would have
+ * to be recovered if we were to remove those flow dependences.
+ * We therefore keep the flow dependences that originate in a must write,
+ * even if it corresponds to a known independence.
+ */
+static void remove_independences_from_tagged_flow(struct ppcg_scop *ps)
+{
+	isl_union_map *tf;
+	isl_union_set *indep;
+	isl_union_set *mw;
+
+	tf = isl_union_map_copy(ps->tagged_dep_flow);
+	tf = isl_union_map_zip(tf);
+	indep = isl_union_map_wrap(isl_union_map_copy(ps->independence));
+	tf = isl_union_map_intersect_domain(tf, indep);
+	tf = isl_union_map_zip(tf);
+	mw = isl_union_map_domain(isl_union_map_copy(ps->tagged_must_writes));
+	tf = isl_union_map_subtract_domain(tf, mw);
+	ps->tagged_dep_flow = isl_union_map_subtract(ps->tagged_dep_flow, tf);
+}
+
 /* Compute the dependences of the program represented by "scop"
  * in case live range reordering is allowed.
  *
  * We compute the actual live ranges and the corresponding order
  * false dependences.
+ *
+ * The independences are removed from the flow dependences
+ * (provided the source is not a must-write) as well as
+ * from the external false dependences (by compute_forced_dependences).
  */
 static void compute_live_range_reordering_dependences(struct ppcg_scop *ps)
 {
-	isl_union_map *before;
-	isl_union_map *schedule;
-
-	schedule = isl_schedule_get_map(ps->schedule);
-	before = isl_union_map_lex_lt_union_map(schedule,
-			isl_union_map_copy(schedule));
-
-	compute_tagged_flow_dep(ps);
-	compute_order_dependences(ps, isl_union_map_copy(before));
-	compute_forced_dependences(ps, before);
+	compute_tagged_flow_dep_only(ps);
+	remove_independences_from_tagged_flow(ps);
+	derive_flow_dep_from_tagged_flow_dep(ps);
+	compute_order_dependences(ps);
+	compute_forced_dependences(ps);
 }
 
 /* Compute the potential flow dependences and the potential live in
@@ -795,6 +873,11 @@ static struct ppcg_scop *ppcg_scop_from_pet_scop(struct pet_scop *scop,
 	ps->end = pet_loc_get_end(scop->loc);
 	ps->context = isl_set_copy(scop->context);
 	ps->context = set_intersect_str(ps->context, options->ctx);
+	if (options->non_negative_parameters) {
+		isl_space *space = isl_set_get_space(ps->context);
+		isl_set *nn = isl_set_nat_universe(space);
+		ps->context = isl_set_intersect(ps->context, nn);
+	}
 	ps->domain = collect_non_kill_domains(scop);
 	ps->call = collect_call_domains(scop);
 	ps->tagged_reads = pet_scop_collect_tagged_may_reads(scop);
