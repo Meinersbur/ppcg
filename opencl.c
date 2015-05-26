@@ -1012,6 +1012,7 @@ static __isl_give isl_printer *opencl_print_kernel(struct gpu_prog *prog,
 struct print_host_user_data_opencl {
 	struct opencl_info *opencl;
 	struct gpu_prog *prog;
+	int transfer_to_host_pending;
 };
 
 /* This function prints the i'th block size multiplied by the i'th grid size,
@@ -1141,7 +1142,7 @@ static __isl_give isl_printer *copy_array(
  */
 static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
 	__isl_keep isl_ast_node *node, struct gpu_prog *prog,
-	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options)
+	__isl_keep isl_ast_build *build, __isl_keep isl_ast_print_options *print_options, int *transfer_to_host_pending)
 {
 	isl_ast_expr *expr, *arg;
 	isl_id *id;
@@ -1162,9 +1163,10 @@ static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
 	if (!array)
 		return isl_printer_free(p);
 
-	if (!prefixcmp(name, "to_device"))
+	if (!prefixcmp(name, "to_device")) {
+		*transfer_to_host_pending = 1;
 		return copy_array(p, array, 0, build, print_options);
-	else
+	} else
 		return copy_array(p, array, 1, build, print_options);
 }
 
@@ -1214,7 +1216,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 
 	id = isl_ast_node_get_annotation(node);
 	if (!id) {
-		p = print_to_from_device(p, node, data->prog, build, print_options);
+		p = print_to_from_device(p, node, data->prog, build, print_options, &data->transfer_to_host_pending);
 		isl_ast_print_options_free(print_options);
 		isl_ast_build_free(build);
 		return p;
@@ -1226,6 +1228,13 @@ static __isl_give isl_printer *opencl_print_host_user(
 	isl_id_free(id);
 
 	if (is_user) {
+		if (data->transfer_to_host_pending) {
+			p = isl_printer_start_line(p);
+			p = isl_printer_print_str(p, "prl_wait_pending_transfers();");
+			p = isl_printer_end_line(p);
+			data->transfer_to_host_pending = 0;
+		}
+
 		p = ppcg_kernel_print_domain(p, stmt);
 		isl_ast_print_options_free(print_options);
 		isl_ast_build_free(build);
@@ -1312,7 +1321,7 @@ static __isl_give isl_printer *opencl_print_host_code(__isl_take isl_printer *p,
 	struct opencl_info *opencl, __isl_take isl_ast_print_options *print_options)
 {
 	isl_ctx *ctx = isl_ast_node_get_ctx(tree);
-	struct print_host_user_data_opencl data = { opencl, prog };
+	struct print_host_user_data_opencl data = { opencl, prog, 0 };
 
 	print_options = isl_ast_print_options_set_print_user(print_options,
 				&opencl_print_host_user, &data);
