@@ -38,6 +38,8 @@ ISL_ARG_STR_LIST(struct ppcg_options, opencl_n_include_file,
 	"file to #include in generated OpenCL code")
 ISL_ARG_BOOL(struct ppcg_options, opencl_embed_kernel_code, 0,
 	"embed-kernel-code", 0, "embed kernel code into host code")
+ISL_ARG_BOOL(struct ppcg_options, opencl_pencil_runtime, 0,
+	"pencil-runtime", 0, "use OpenCL PENCIL runtime")
 ISL_ARGS_END
 
 ISL_ARGS_START(struct ppcg_options, ppcg_options_args)
