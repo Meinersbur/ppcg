@@ -461,7 +461,7 @@ struct ppcg_extract_size_data {
  * If the name of the set matches data->type, we store the
  * set in data->res.
  */
-static int extract_size_of_type(__isl_take isl_set *size, void *user)
+static isl_stat extract_size_of_type(__isl_take isl_set *size, void *user)
 {
 	struct ppcg_extract_size_data *data = user;
 	const char *name;
@@ -469,11 +469,11 @@ static int extract_size_of_type(__isl_take isl_set *size, void *user)
 	name = isl_set_get_tuple_name(size);
 	if (name && !strcmp(name, data->type)) {
 		data->res = size;
-		return -1;
+		return isl_stat_error;
 	}
 
 	isl_set_free(size);
-	return 0;
+	return isl_stat_ok;
 }
 
 /* Given a union map { kernel[i] -> *[...] },
@@ -2277,18 +2277,18 @@ static __isl_give isl_ast_node *after_mark(__isl_take isl_ast_node *node,
 	return node;
 }
 
-static int update_depth(__isl_keep isl_schedule_node *node, void *user)
+static isl_bool update_depth(__isl_keep isl_schedule_node *node, void *user)
 {
 	int *depth = user;
 	int node_depth;
 
 	if (isl_schedule_node_get_type(node) != isl_schedule_node_leaf)
-		return 1;
+		return isl_bool_true;
 	node_depth = isl_schedule_node_get_schedule_depth(node);
 	if (node_depth > *depth)
 		*depth = node_depth;
 
-	return 0;
+	return isl_bool_false;
 }
 
 /* Use isl to generate code for both the host and the device
@@ -2312,7 +2312,7 @@ static __isl_give isl_ast_node *generate_code(struct gpu_gen *gen,
 	data.kernel = NULL;
 
 	depth = 0;
-	if (isl_schedule_foreach_schedule_node(schedule, &update_depth,
+	if (isl_schedule_foreach_schedule_node_top_down(schedule, &update_depth,
 						&depth) < 0)
 		return NULL;
 	build = isl_ast_build_alloc(gen->prog->ctx);
@@ -2356,25 +2356,25 @@ static int is_permutable(__isl_keep isl_schedule_node *node)
 	return 1;
 }
 
-/* A isl_schedule_foreach_schedule_node callback
+/* A isl_schedule_foreach_schedule_node_top_down callback
  * for setting *any_permutable and aborting the search
  * if "node" is a permutable band with coincident dimensions.
  * Otherwise, continue searching.
  */
-static int set_permutable(__isl_keep isl_schedule_node *node, void *user)
+static isl_bool set_permutable(__isl_keep isl_schedule_node *node, void *user)
 {
 	int *any_permutable = user;
 	int permutable;
 
 	permutable = is_permutable(node);
 	if (permutable < 0)
-		return -1;
+		return isl_bool_error;
 	if (!permutable)
-		return 1;
+		return isl_bool_true;
 
 	*any_permutable = 1;
 
-	return -1;
+	return isl_bool_error;
 }
 
 /* Does "schedule" contain any permutable band with at least one coincident
@@ -2384,8 +2384,8 @@ static int has_any_permutable_node(__isl_keep isl_schedule *schedule)
 {
 	int any_permutable = 0;
 
-	if (isl_schedule_foreach_schedule_node(schedule, &set_permutable,
-						&any_permutable) < 0 &&
+	if (isl_schedule_foreach_schedule_node_top_down(schedule,
+				    &set_permutable, &any_permutable) < 0 &&
 	    !any_permutable)
 		return -1;
 
@@ -3841,7 +3841,7 @@ static int subtree_has_permutable_bands(__isl_keep isl_schedule_node *node)
 {
 	int any_parallelism = 0;
 
-	if (isl_schedule_node_foreach_descendant(node, &set_permutable,
+	if (isl_schedule_node_foreach_descendant_top_down(node, &set_permutable,
 						&any_parallelism) < 0 &&
 	    !any_parallelism)
 		return -1;
@@ -3980,7 +3980,7 @@ static __isl_give isl_union_map *approximate_copy_out(
 static __isl_give isl_schedule_node *mark_kernels(struct gpu_gen *gen,
 	__isl_take isl_schedule_node *node)
 {
-	return isl_schedule_node_map_descendant(node,
+	return isl_schedule_node_map_descendant_bottom_up(node,
 						&mark_outer_permutable, gen);
 }
 
@@ -4259,7 +4259,7 @@ static __isl_give isl_schedule *determine_properties_original_schedule(
 
 	schedule = isl_schedule_copy(gen->prog->scop->schedule);
 	sc = construct_schedule_constraints(gen->prog);
-	schedule = isl_schedule_map_schedule_node(schedule,
+	schedule = isl_schedule_map_schedule_node_bottom_up(schedule,
 						    &set_band_properties, sc);
 	isl_schedule_constraints_free(sc);
 
@@ -4717,13 +4717,14 @@ static int update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 
 /* Update the information in "data" based on the ancestor "node".
  */
-static int update_may_persist_at(__isl_keep isl_schedule_node *node, void *user)
+static isl_stat update_may_persist_at(__isl_keep isl_schedule_node *node,
+	void *user)
 {
 	struct ppcg_may_persist_data *data = user;
 
 	switch (isl_schedule_node_get_type(node)) {
 	case isl_schedule_node_error:
-		return -1;
+		return isl_stat_error;
 	case isl_schedule_node_context:
 	case isl_schedule_node_domain:
 	case isl_schedule_node_expansion:
@@ -4736,15 +4737,15 @@ static int update_may_persist_at(__isl_keep isl_schedule_node *node, void *user)
 		break;
 	case isl_schedule_node_band:
 		if (update_may_persist_at_band(node, data) < 0)
-			return -1;
+			return isl_stat_error;
 		break;
 	case isl_schedule_node_filter:
 		if (update_may_persist_at_filter(node, data) < 0)
-			return -1;
+			return isl_stat_error;
 		break;
 	}
 
-	return 0;
+	return isl_stat_ok;
 }
 
 /* Determine the set of array elements that may need to be perserved
