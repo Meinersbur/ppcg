@@ -22,40 +22,20 @@ __isl_give isl_printer *gpu_print_local_declarations(__isl_take isl_printer *p,
 	struct gpu_prog *prog)
 {
 	int i;
+	isl_ast_build *build;
 
 	if (!prog)
 		return isl_printer_free(p);
 
+	build = isl_ast_build_from_context(isl_set_copy(prog->scop->context));
 	for (i = 0; i < prog->n_array; ++i) {
 		if (!prog->array[i].declare_local)
 			continue;
-		p = ppcg_print_declaration(p, prog->scop->pet->arrays[i]);
+		p = ppcg_print_declaration(p, prog->scop->pet->arrays[i],
+					    build);
 	}
+	isl_ast_build_free(build);
 
-	return p;
-}
-
-static int print_macro(enum isl_ast_op_type type, void *user)
-{
-	isl_printer **p = user;
-
-	if (type == isl_ast_op_fdiv_q)
-		return 0;
-
-	*p = isl_ast_op_type_print_macro(type, *p);
-
-	return 0;
-}
-
-/* Print the required macros for "node", including one for floord.
- * We always print a macro for floord as it may also appear in the statements.
- */
-__isl_give isl_printer *gpu_print_macros(__isl_take isl_printer *p,
-	__isl_keep isl_ast_node *node)
-{
-	p = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, p);
-	if (isl_ast_node_foreach_ast_op_type(node, &print_macro, &p) < 0)
-		return isl_printer_free(p);
 	return p;
 }
 

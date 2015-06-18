@@ -428,36 +428,23 @@ struct gpu_group_data {
 	isl_union_map *full_sched;
 };
 
-/* Construct a map from domain_dim to domain_dim that increments
+/* Construct a map from domain_space to domain_space that increments
  * the dimension at position "pos" and leaves all other dimensions
  * constant.
  */
-static __isl_give isl_map *next(__isl_take isl_space *domain_dim, int pos)
+static __isl_give isl_map *next(__isl_take isl_space *domain_space, int pos)
 {
-	int i;
-	int len = isl_space_dim(domain_dim, isl_dim_set);
-	isl_space *dim;
-	isl_basic_map *next;
-	isl_local_space *ls;
+	isl_space *space;
+	isl_aff *aff;
+	isl_multi_aff *next;
 
-	dim = isl_space_map_from_set(domain_dim);
-	next = isl_basic_map_universe(isl_space_copy(dim));
-	ls = isl_local_space_from_space(dim);
+	space = isl_space_map_from_set(domain_space);
+	next = isl_multi_aff_identity(space);
+	aff = isl_multi_aff_get_aff(next, pos);
+	aff = isl_aff_add_constant_si(aff, 1);
+	next = isl_multi_aff_set_aff(next, pos, aff);
 
-	for (i = 0; i < len; ++i) {
-		isl_constraint *c;
-
-		c = isl_equality_alloc(isl_local_space_copy(ls));
-		c = isl_constraint_set_coefficient_si(c, isl_dim_in, i, 1);
-		c = isl_constraint_set_coefficient_si(c, isl_dim_out, i, -1);
-		if (i == pos)
-			c = isl_constraint_set_constant_si(c, 1);
-		next = isl_basic_map_add_constraint(next, c);
-	}
-
-	isl_local_space_free(ls);
-
-	return isl_map_from_basic_map(next);
+	return isl_map_from_multi_aff(next);
 }
 
 /* Check if the given access is coalesced (or if there is no point
