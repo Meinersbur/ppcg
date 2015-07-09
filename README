@@ -1,3 +1,27 @@
+Polyhedral Parallel Code Generator (PPCG)
+branch with CMake build system
+-------------------------
+
+The orignal project's website can be found at http://ppcg.gforge.inria.fr,
+its public repository at http://repo.or.cz/w/ppcg.git. There is a mainling list
+at isl-development@googlegroups.com where users can ask for help and developer
+discussions take place.
+
+For discussions about this branch please use the Github tools
+(https://github.com/Meinersbur/ppcg) or contact the author (ppcg@meinersbur.de).
+
+This branch adds the files necessary to compile ISL using CMake. It is not a
+feature-complete replacement of the autotools build system, but has been created
+for convinience in order to user builder such as Ninja or Visual Studio. The
+autotools-based build system remains in place.
+
+Mote that this branch will be rebased to the official master branch,
+instead of merging it in. No consistent history is provided.
+
+
+Original README
+-------------------------
+
 Requirements:
 
 - automake, autoconf, libtool
