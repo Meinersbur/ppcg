@@ -8,7 +8,7 @@ if BUNDLED_PET
     PET_LA = $(top_builddir)/pet/libpet.la
 endif
 
-SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET) .
+SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET)
 
 FORCE:
 isl/libisl.la: FORCE
@@ -60,9 +60,12 @@ EXTRA_TESTS = opencl_test.sh polybench_test.sh
 TEST_EXTENSIONS = .sh
 
 EXTRA_DIST = \
+	autogen.sh \
 	ocl_utilities.c \
 	ocl_utilities.h \
 	tests
+
+CLEANFILES = gitversion.h
 
 dist-hook:
 	echo @GIT_HEAD_VERSION@ > $(distdir)/GIT_HEAD_ID

@@ -45,13 +45,14 @@ $3)
 	case "$4" in
 	bundled)
 		if test -d $srcdir/.git -a \
-			-d $srcdir/$1 -a \
-			"`cd $srcdir; git submodule status $1 | cut -c1`" = '-'; then
-			AC_MSG_WARN([git repo detected, but submodule $1 not initialized])
-			AC_MSG_WARN([You may want to run])
-			AC_MSG_WARN([	git submodule init])
-			AC_MSG_WARN([	git submodule update])
-			AC_MSG_WARN([	sh autogen.sh])
+			-d $srcdir/$1; then
+			if test "`cd $srcdir; git submodule status $1 | cut -c1`" = '-'; then
+				AC_MSG_WARN([git repo detected, but submodule $1 not initialized])
+				AC_MSG_WARN([You may want to run])
+				AC_MSG_WARN([	git submodule init])
+				AC_MSG_WARN([	git submodule update])
+				AC_MSG_WARN([	sh autogen.sh])
+			fi
 		fi
 		if test -f $srcdir/$1/configure; then
 			with_$2="bundled"
