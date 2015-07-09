@@ -1,5 +1,5 @@
 Polyhedral Parallel Code Generator (PPCG)
-branch with CMake build system
+branch for pencilcc
 -------------------------
 
 The orignal project's website can be found at http://ppcg.gforge.inria.fr,
@@ -10,10 +10,7 @@ discussions take place.
 For discussions about this branch please use the Github tools
 (https://github.com/Meinersbur/ppcg) or contact the author (ppcg@meinersbur.de).
 
-This branch adds the files necessary to compile ISL using CMake. It is not a
-feature-complete replacement of the autotools build system, but has been created
-for convinience in order to user builder such as Ninja or Visual Studio. The
-autotools-based build system remains in place.
+This branch is used by pencilcc (https://github.com/Meinersbur/pencilcc).
 
 Mote that this branch will be rebased to the official master branch,
 instead of merging it in. No consistent history is provided.
