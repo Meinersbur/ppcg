@@ -21,8 +21,8 @@ SIZE=-DMINI_DATASET
 CC="@CC@"
 HAVE_OPENCL=@HAVE_OPENCL@
 HAVE_OPENMP=@HAVE_OPENMP@
-srcdir="@srcdir@"
-bindir="@bindir@"
+srcdir="@abs_srcdir@"
+bindir="@abs_builddir@"
 if [ $keep = "yes" ]; then
 	OUTDIR="out.$VERSION"
 	mkdir -p "$OUTDIR" || exit 1
@@ -68,10 +68,10 @@ run_tests () {
 		output_opt=${OUTDIR}/$name.$ext.out
 		dir=`dirname $i`
 		if [ $verbose = "yes" ]; then
-			echo $bindir/ppcg$EXEEXT -I $DIR/$dir $DIR/$i \
+			echo ${bindir}/ppcg$EXEEXT -I $DIR/$dir $DIR/$i \
 				$CPPFLAGS -o $source_opt $ppcg_options
 		fi
-		$bindir/ppcg$EXEEXT -I $DIR/$dir $DIR/$i $CPPFLAGS \
+		${bindir}/ppcg$EXEEXT -I $DIR/$dir $DIR/$i $CPPFLAGS \
 			-o $source_opt $ppcg_options || exit
 		$CC -I $DIR/$dir $CPPFLAGS $DIR/$i -o $prog_orig \
 			$DIR/utilities/polybench.c $CFLAGS
@@ -94,7 +94,7 @@ run_tests () {
 	done
 }
 
-run_tests ppcg_prl "--target=prl" "-g -O0 -I@PRL_INCLUDE_DIR@ -L@PRL_LIBRARY_PATH@ -lprl_opencl -lOpenCL -lm"
+#run_tests ppcg_prl "--target=prl" "-g -O0 -I@PRL_INCLUDE_DIR@ -L@PRL_LIBRARY_PATH@ -lprl_opencl -lOpenCL -lm"
 
 run_tests ppcg --target=c
 run_tests ppcg_live "--target=c --no-live-range-reordering"
