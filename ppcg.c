@@ -1026,7 +1026,7 @@ int main(int argc, char **argv)
 		r = EXIT_FAILURE;
 	else if (options->ppcg->target == PPCG_TARGET_CUDA)
 		r = generate_cuda(ctx, options->ppcg, options->input);
-	else if (options->ppcg->target == PPCG_TARGET_OPENCL)
+	else if (options->ppcg->target == PPCG_TARGET_OPENCL || options->ppcg->target == PPCG_TARGET_PRL)
 		r = generate_opencl(ctx, options->ppcg, options->input,
 				options->output);
 	else

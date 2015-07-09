@@ -73,5 +73,6 @@ ISL_ARG_DECL(ppcg_options, struct ppcg_options, ppcg_options_args)
 #define		PPCG_TARGET_C		0
 #define		PPCG_TARGET_CUDA	1
 #define		PPCG_TARGET_OPENCL      2
+#define		PPCG_TARGET_PRL         3
 
 #endif

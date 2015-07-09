@@ -14,6 +14,7 @@ static struct isl_arg_choice target[] = {
 	{"c",		PPCG_TARGET_C},
 	{"cuda",	PPCG_TARGET_CUDA},
 	{"opencl",      PPCG_TARGET_OPENCL},
+	{"prl",         PPCG_TARGET_PRL},
 	{0}
 };
 
