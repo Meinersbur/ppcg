@@ -1318,9 +1318,14 @@ static __isl_give isl_printer *opencl_setup(__isl_take isl_printer *p,
 		p = isl_printer_end_line(p);
 
 		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "prl_scop_program_from_file(__ppcg_scopinst, &__ppcg_program, \"");
-		p = isl_printer_print_str(p, info->kernel_c_name);
-		p = isl_printer_print_str(p, "\");");
+		if (info->options->opencl_embed_kernel_code) {
+			p = isl_printer_print_str(p, "prl_scop_program_from_str(__ppcg_scopinst, &__ppcg_program, kernel_code, sizeof(kernel_code));\n");
+		} else {
+			p = isl_printer_print_str(p, "prl_scop_program_from_file(__ppcg_scopinst, &__ppcg_program, \"");
+			p = isl_printer_print_str(p, info->kernel_c_name);
+			p = isl_printer_print_str(p, "\");");
+		}
+
 		p = isl_printer_end_line(p);
 	}
 
