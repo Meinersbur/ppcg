@@ -466,6 +466,7 @@ static __isl_give isl_map *next(__isl_take isl_space *domain_space, int pos)
 static int access_is_coalesced(struct gpu_group_data *data,
 	__isl_keep isl_union_map *access)
 {
+	int dim;
 	isl_space *space;
 	isl_set *accessed;
 	isl_map *access_map;
@@ -481,7 +482,11 @@ static int access_is_coalesced(struct gpu_group_data *data,
 
 	space = isl_map_get_space(access_map);
 	space = isl_space_range(space);
-	next_element = next(space, isl_space_dim(space, isl_dim_set) - 1);
+	dim = isl_space_dim(space, isl_dim_set);
+	if (dim == 0)
+		next_element = isl_map_empty(isl_space_map_from_set(space));
+	else
+		next_element = next(space, dim - 1);
 
 	accessed = isl_map_range(isl_map_copy(access_map));
 	map = isl_map_copy(next_element);
@@ -1156,19 +1161,12 @@ static int group_common_shared_memory_tile(struct ppcg_kernel *kernel,
 		if (!groups[i]->shared_tile)
 			continue;
 		for (j = n - 1; j > i; --j) {
-			isl_map *map;
-			int empty;
 			struct gpu_array_ref_group *group;
 
 			if (!groups[j]->shared_tile)
 				continue;
 
-			map = isl_map_intersect(isl_map_copy(groups[i]->access),
-					    isl_map_copy(groups[j]->access));
-			empty = isl_map_is_empty(map);
-			isl_map_free(map);
-
-			if (empty)
+			if (!depth_accesses_overlap(groups[i], groups[j]))
 				continue;
 
 			group = join_groups(groups[i], groups[j]);
