@@ -384,7 +384,7 @@ static __isl_give isl_printer *opencl_set_kernel_argument(
 	} else {
 		p = isl_printer_start_line(p);
 		if (read_only_scalar) {
-			p = isl_printer_print_str(p, "{ .type = prl_kernel_call_arg_value, .data = &");
+			p = isl_printer_print_str(p, "{ .type = prl_kernel_call_arg_value, .data = (void*)&");
 			p = isl_printer_print_str(p, arg_name);
 			p = isl_printer_print_str(p, ", .size = sizeof(");
 			p = isl_printer_print_str(p, arg_name);
