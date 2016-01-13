@@ -37,7 +37,7 @@ void cuda_open_files(struct cuda_info *info, const char *input)
     fprintf(info->host_c, "#include <stdio.h>\n");
     fprintf(info->host_c, "#include \"%s\"\n", name);
     fprintf(info->kernel_c, "#include \"%s\"\n", name);
-    fprintf(info->kernel_h, "#include \"cuda.h\"\n\n");
+    fprintf(info->kernel_h, "#include <cuda.h>\n\n");
 }
 
 /* Close all output files.
