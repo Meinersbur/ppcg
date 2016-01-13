@@ -2,6 +2,7 @@
 #define PPCG_OPTIONS_H
 
 #include <isl/arg.h>
+#include <isl/options.h>
 
 struct ppcg_debug_options {
 	int dump_schedule_constraints;
@@ -12,6 +13,7 @@ struct ppcg_debug_options {
 };
 
 struct ppcg_options {
+	struct isl_options *isl;
 	struct ppcg_debug_options *debug;
 
 	/* Use isl to compute a schedule replacing the original schedule. */
@@ -24,6 +26,8 @@ struct ppcg_options {
 	char *ctx;
 	char *sizes;
 
+	/* Perform tiling (C target). */
+	int tile;
 	int tile_size;
 
 	/* Take advantage of private memory. */
@@ -74,5 +78,7 @@ ISL_ARG_DECL(ppcg_options, struct ppcg_options, ppcg_options_args)
 #define		PPCG_TARGET_CUDA	1
 #define		PPCG_TARGET_OPENCL      2
 #define		PPCG_TARGET_PRL         3
+
+void ppcg_options_set_target_defaults(struct ppcg_options *options);
 
 #endif
