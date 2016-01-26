@@ -30,7 +30,7 @@ Requirements:
 	(only needed if you want to compile the pet executable)
 - LLVM/clang libraries, 2.9 or higher (http://clang.llvm.org/get_started.html)
 	Unless you have some other reasons for wanting to use the svn version,
-	it is best to install the latest release (3.6).
+	it is best to install the latest release (3.7).
 	For more details, see pet/README.
 
 If you are installing on Ubuntu, then you can install the following packages:
@@ -220,6 +220,11 @@ Contact
 
 For bug reports, feature requests and questions,
 contact http://groups.google.com/group/isl-development
+
+Whenever you report a bug, please mention the exact version of PPCG
+that you are using (output of "./ppcg --version").  If you are unable
+to compile PPCG, then report the git version (output of "git describe")
+or the version number included in the name of the tarball.
 
 
 Citing PPCG

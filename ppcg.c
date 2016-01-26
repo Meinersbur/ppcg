@@ -29,7 +29,6 @@
 #include "cpu.h"
 
 struct options {
-	struct isl_options *isl;
 	struct pet_options *pet;
 	struct ppcg_options *ppcg;
 	char *input;
@@ -43,7 +42,6 @@ static void print_version(void)
 }
 
 ISL_ARGS_START(struct options, options_args)
-ISL_ARG_CHILD(struct options, isl, "isl", &isl_options_args, "isl options")
 ISL_ARG_CHILD(struct options, pet, "pet", &pet_options_args, "pet options")
 ISL_ARG_CHILD(struct options, ppcg, NULL, &ppcg_options_args, "ppcg options")
 ISL_ARG_STR(struct options, output, 'o', NULL,
@@ -360,35 +358,48 @@ static void compute_tagger(struct ppcg_scop *ps)
  *
  * We compute the "dependence" of any "kill" (an explicit kill
  * or a must write) on any may write.
- * The may writes with a "depending" kill are definitely killed.
+ * The elements accessed by the may writes with a "depending" kill
+ * also accessing the element are definitely killed.
  * The remaining may writes can potentially be live out.
+ *
+ * The result of the dependence analysis is
+ *
+ *	{ IW -> [IK -> A] }
+ *
+ * with IW the instance of the write statement, IK the instance of kill
+ * statement and A the element that was killed.
+ * The range factor range is
+ *
+ *	{ IW -> A }
+ *
+ * containing all such pairs for which there is a kill statement instance,
+ * i.e., all pairs that have been killed.
  */
 static void compute_live_out(struct ppcg_scop *ps)
 {
-	isl_union_pw_multi_aff *tagger;
 	isl_schedule *schedule;
 	isl_union_map *kills;
 	isl_union_map *exposed;
 	isl_union_map *covering;
+	isl_union_set *accessed;
 	isl_union_access_info *access;
 	isl_union_flow *flow;
 
-	tagger = isl_union_pw_multi_aff_copy(ps->tagger);
 	schedule = isl_schedule_copy(ps->schedule);
-	schedule = isl_schedule_pullback_union_pw_multi_aff(schedule, tagger);
-	kills = isl_union_map_union(isl_union_map_copy(ps->tagged_must_writes),
-				    isl_union_map_copy(ps->tagged_must_kills));
+	kills = isl_union_map_union(isl_union_map_copy(ps->must_writes),
+				    isl_union_map_copy(ps->must_kills));
 	access = isl_union_access_info_from_sink(kills);
 	access = isl_union_access_info_set_may_source(access,
-				isl_union_map_copy(ps->tagged_may_writes));
+				    isl_union_map_copy(ps->may_writes));
 	access = isl_union_access_info_set_schedule(access, schedule);
 	flow = isl_union_access_info_compute_flow(access);
-	covering = isl_union_flow_get_may_dependence(flow);
+	covering = isl_union_flow_get_full_may_dependence(flow);
 	isl_union_flow_free(flow);
-	exposed = isl_union_map_copy(ps->tagged_may_writes);
-	exposed = isl_union_map_subtract_domain(exposed,
-				isl_union_map_domain(covering));
-	ps->live_out = project_out_tags(exposed);
+
+	covering = isl_union_map_range_factor_range(covering);
+	exposed = isl_union_map_copy(ps->may_writes);
+	exposed = isl_union_map_subtract(exposed, covering);
+	ps->live_out = exposed;
 }
 
 /* Compute the tagged flow dependences and the live_in accesses and store
@@ -830,6 +841,7 @@ static void *ppcg_scop_free(struct ppcg_scop *ps)
 	isl_union_map_free(ps->must_writes);
 	isl_union_map_free(ps->live_out);
 	isl_union_map_free(ps->tagged_must_kills);
+	isl_union_map_free(ps->must_kills);
 	isl_union_map_free(ps->tagged_dep_flow);
 	isl_union_map_free(ps->dep_flow);
 	isl_union_map_free(ps->dep_false);
@@ -880,13 +892,14 @@ static struct ppcg_scop *ppcg_scop_from_pet_scop(struct pet_scop *scop,
 	}
 	ps->domain = collect_non_kill_domains(scop);
 	ps->call = collect_call_domains(scop);
-	ps->tagged_reads = pet_scop_collect_tagged_may_reads(scop);
-	ps->reads = pet_scop_collect_may_reads(scop);
-	ps->tagged_may_writes = pet_scop_collect_tagged_may_writes(scop);
-	ps->may_writes = pet_scop_collect_may_writes(scop);
-	ps->tagged_must_writes = pet_scop_collect_tagged_must_writes(scop);
-	ps->must_writes = pet_scop_collect_must_writes(scop);
-	ps->tagged_must_kills = pet_scop_collect_tagged_must_kills(scop);
+	ps->tagged_reads = pet_scop_get_tagged_may_reads(scop);
+	ps->reads = pet_scop_get_may_reads(scop);
+	ps->tagged_may_writes = pet_scop_get_tagged_may_writes(scop);
+	ps->may_writes = pet_scop_get_may_writes(scop);
+	ps->tagged_must_writes = pet_scop_get_tagged_must_writes(scop);
+	ps->must_writes = pet_scop_get_must_writes(scop);
+	ps->tagged_must_kills = pet_scop_get_tagged_must_kills(scop);
+	ps->must_kills = pet_scop_get_must_kills(scop);
 	ps->schedule = isl_schedule_copy(scop->schedule);
 	ps->pet = scop;
 	ps->independence = isl_union_map_empty(isl_set_get_space(ps->context));
@@ -900,7 +913,7 @@ static struct ppcg_scop *ppcg_scop_from_pet_scop(struct pet_scop *scop,
 
 	if (!ps->context || !ps->domain || !ps->call || !ps->reads ||
 	    !ps->may_writes || !ps->must_writes || !ps->tagged_must_kills ||
-	    !ps->schedule || !ps->independence || !ps->names)
+	    !ps->must_kills || !ps->schedule || !ps->independence || !ps->names)
 		return ppcg_scop_free(ps);
 
 	return ps;
@@ -1017,7 +1030,7 @@ int main(int argc, char **argv)
 	assert(options);
 
 	ctx = isl_ctx_alloc_with_options(&options_args, options);
-	isl_options_set_schedule_outer_coincidence(ctx, 1);
+	ppcg_options_set_target_defaults(options->ppcg);
 	isl_options_set_schedule_maximize_band_depth(ctx, 1);
 	pet_options_set_encapsulate_dynamic_control(ctx, 1);
 	argc = options_parse(options, argc, argv, ISL_ARG_ALL);

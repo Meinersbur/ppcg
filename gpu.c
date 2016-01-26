@@ -818,8 +818,8 @@ static __isl_give isl_set *array_extent(struct gpu_array_info *array)
 	return extent;
 }
 
-/* Return a map from the first group->depth dimensions of the computed
- * schedule to the array tile in
+/* Return a map from the first group->shared_tile->depth dimensions
+ * of the computed schedule to the array tile in
  * global memory that corresponds to the shared memory copy.
  *
  * In particular, return a map
@@ -873,15 +873,15 @@ static __isl_give isl_map *group_tile(struct gpu_array_ref_group *group)
 
 /* Given a mapping "iterator_map" from the AST schedule to a domain,
  * return the corresponding mapping from the AST schedule to
- * to the outer kernel->shared_schedule_dim dimensions of
+ * to the outer kernel->copy_schedule_dim dimensions of
  * the schedule computed by PPCG for this kernel.
  *
- * Note that kernel->shared_schedule_dim is at least as large as
+ * Note that kernel->copy_schedule_dim is at least as large as
  * the largest depth of any array reference group associated to the kernel.
  * This is needed as the returned schedule is used to extract a mapping
- * to the outer group->depth dimensions in transform_index.
+ * to the outer tile->depth dimensions in transform_index.
  */
-static __isl_give isl_pw_multi_aff *compute_sched_to_shared(
+static __isl_give isl_pw_multi_aff *compute_sched_to_copy(
 	struct ppcg_kernel *kernel, __isl_take isl_pw_multi_aff *iterator_map)
 {
 	isl_union_pw_multi_aff *upma;
@@ -891,9 +891,9 @@ static __isl_give isl_pw_multi_aff *compute_sched_to_shared(
 	space = isl_space_range(isl_pw_multi_aff_get_space(iterator_map));
 	space = isl_space_from_domain(space);
 	space = isl_space_add_dims(space, isl_dim_out,
-					kernel->shared_schedule_dim);
+					kernel->copy_schedule_dim);
 
-	upma = isl_union_pw_multi_aff_copy(kernel->shared_schedule);
+	upma = isl_union_pw_multi_aff_copy(kernel->copy_schedule);
 	pma = isl_union_pw_multi_aff_extract_pw_multi_aff(upma, space);
 	isl_union_pw_multi_aff_free(upma);
 
@@ -929,11 +929,11 @@ static void check_shared_memory_bound(struct ppcg_kernel *kernel)
 
 		for (j = 0; j < local->n_group; ++j) {
 			struct gpu_array_ref_group *group;
+			enum ppcg_group_access_type type;
 
 			group = local->groups[j];
-			if (group->private_tile)
-				continue;
-			if (!group->shared_tile)
+			type = gpu_array_ref_group_type(group);
+			if (type != ppcg_access_shared)
 				continue;
 
 			size = gpu_array_tile_size(group->shared_tile);
@@ -1175,7 +1175,7 @@ struct ppcg_kernel *ppcg_kernel_free(struct ppcg_kernel *kernel)
 	isl_ast_node_free(kernel->tree);
 	isl_union_set_free(kernel->block_filter);
 	isl_union_set_free(kernel->thread_filter);
-	isl_union_pw_multi_aff_free(kernel->shared_schedule);
+	isl_union_pw_multi_aff_free(kernel->copy_schedule);
 	isl_union_set_free(kernel->sync_writes);
 
 	for (i = 0; i < kernel->n_array; ++i) {
@@ -1219,12 +1219,8 @@ static void create_kernel_var(isl_ctx *ctx, struct gpu_array_ref_group *group,
 
 	var->array = group->array;
 
-	tile = group->private_tile;
-	var->type = ppcg_access_private;
-	if (!tile) {
-		tile = group->shared_tile;
-		var->type = ppcg_access_shared;
-	}
+	var->type = gpu_array_ref_group_type(group);
+	tile = gpu_array_ref_group_tile(group);
 
 	p = isl_printer_to_str(ctx);
 	p = gpu_array_ref_group_print_name(group, p);
@@ -1248,7 +1244,10 @@ static int create_kernel_vars(struct ppcg_kernel *kernel)
 
 		for (j = 0; j < array->n_group; ++j) {
 			struct gpu_array_ref_group *group = array->groups[j];
-			if (group->private_tile || group->shared_tile)
+			enum ppcg_group_access_type type;
+
+			type = gpu_array_ref_group_type(group);
+			if (type != ppcg_access_global)
 				++n;
 		}
 	}
@@ -1264,7 +1263,10 @@ static int create_kernel_vars(struct ppcg_kernel *kernel)
 
 		for (j = 0; j < array->n_group; ++j) {
 			struct gpu_array_ref_group *group = array->groups[j];
-			if (!group->private_tile && !group->shared_tile)
+			enum ppcg_group_access_type type;
+
+			type = gpu_array_ref_group_type(group);
+			if (type == ppcg_access_global)
 				continue;
 			create_kernel_var(kernel->ctx, group, &kernel->var[n]);
 			++n;
@@ -1452,7 +1454,7 @@ static int find_array_index(struct ppcg_kernel *kernel, const char *name)
  * "accesses" is the list of gpu_stmt_access in the statement.
  * "iterator_map" expresses the statement iterators in terms of
  * the AST loop iterators.
- * "sched2shared" expresses the outer shared_schedule_dim dimensions of
+ * "sched2copy" expresses the outer copy_schedule_dim dimensions of
  * the kernel schedule in terms of the AST loop iterators and
  * may be NULL if we are not inside a kernel.
  *
@@ -1467,7 +1469,7 @@ struct ppcg_transform_data {
 	struct ppcg_kernel *kernel;
 	struct gpu_stmt_access *accesses;
 	isl_pw_multi_aff *iterator_map;
-	isl_pw_multi_aff *sched2shared;
+	isl_pw_multi_aff *sched2copy;
 
 	struct gpu_array_info *array;
 	int global;
@@ -1514,7 +1516,7 @@ static struct gpu_array_ref_group *find_ref_group(
  *
  *	[D -> A] -> T
  *
- * where D corresponds to the outer group->depth dimensions of
+ * where D corresponds to the outer tile->depth dimensions of
  * the kernel schedule.
  * The index is of the form
  *
@@ -1580,9 +1582,7 @@ static __isl_give isl_multi_pw_aff *transform_index(
 		return index;
 	}
 
-	tile = group->private_tile;
-	if (!tile)
-		tile = group->shared_tile;
+	tile = gpu_array_ref_group_tile(group);
 	data->global = !tile;
 	if (!tile)
 		return index;
@@ -1590,10 +1590,10 @@ static __isl_give isl_multi_pw_aff *transform_index(
 	space = isl_space_range(isl_multi_pw_aff_get_space(index));
 	space = isl_space_map_from_set(space);
 	pma = isl_pw_multi_aff_identity(space);
-	sched2depth = isl_pw_multi_aff_copy(data->sched2shared);
+	sched2depth = isl_pw_multi_aff_copy(data->sched2copy);
 	dim = isl_pw_multi_aff_dim(sched2depth, isl_dim_out);
 	sched2depth = isl_pw_multi_aff_drop_dims(sched2depth, isl_dim_out,
-					    group->depth, dim - group->depth);
+					    tile->depth, dim - tile->depth);
 	pma = isl_pw_multi_aff_product(sched2depth, pma);
 	tiling = isl_multi_pw_aff_from_multi_aff(
 				    isl_multi_aff_copy(tile->tiling));
@@ -1792,8 +1792,8 @@ static __isl_give isl_ast_expr *transform_expr(__isl_take isl_ast_expr *expr,
  * with name "user".
  * These AST expressions are computed from iterator_map,
  * which expresses the domain
- * elements in terms of the generated loops, and sched2shared,
- * which expresses the outer shared_schedule_dim dimensions of
+ * elements in terms of the generated loops, and sched2copy,
+ * which expresses the outer copy_schedule_dim dimensions of
  * the kernel schedule computed by PPCG in terms of the generated loops.
  */
 static __isl_give isl_ast_node *create_domain_leaf(
@@ -1804,7 +1804,7 @@ static __isl_give isl_ast_node *create_domain_leaf(
 	struct ppcg_kernel_stmt *stmt;
 	isl_ctx *ctx;
 	isl_id *id;
-	isl_pw_multi_aff *sched2shared;
+	isl_pw_multi_aff *sched2copy;
 	isl_map *map;
 	isl_pw_multi_aff *iterator_map;
 	isl_union_map *schedule;
@@ -1821,10 +1821,10 @@ static __isl_give isl_ast_node *create_domain_leaf(
 	map = isl_map_reverse(isl_map_from_union_map(schedule));
 	iterator_map = isl_pw_multi_aff_from_map(map);
 	if (kernel)
-		sched2shared = compute_sched_to_shared(kernel,
+		sched2copy = compute_sched_to_copy(kernel,
 					isl_pw_multi_aff_copy(iterator_map));
 	else
-		sched2shared = NULL;
+		sched2copy = NULL;
 
 	stmt->type = ppcg_kernel_domain;
 	stmt->u.d.stmt = gpu_stmt;
@@ -1832,13 +1832,13 @@ static __isl_give isl_ast_node *create_domain_leaf(
 	data.kernel = kernel;
 	data.accesses = stmt->u.d.stmt->accesses;
 	data.iterator_map = iterator_map;
-	data.sched2shared = sched2shared;
+	data.sched2copy = sched2copy;
 	stmt->u.d.ref2expr = pet_stmt_build_ast_exprs(stmt->u.d.stmt->stmt,
 					    build, &transform_index, &data,
 					    &transform_expr, &data);
 
 	isl_pw_multi_aff_free(iterator_map);
-	isl_pw_multi_aff_free(sched2shared);
+	isl_pw_multi_aff_free(sched2copy);
 
 	id = isl_id_alloc(ctx, "user", stmt);
 	id = isl_id_set_free_user(id, &ppcg_kernel_stmt_free);
@@ -1856,7 +1856,7 @@ static __isl_give isl_ast_node *create_domain_leaf(
  *
  *	type[D -> A] -> L
  *
- * where D corresponds to the outer group->depth dimensions of
+ * where D corresponds to the outer tile->depth dimensions of
  * the kernel schedule, A to the global array and L to the outer
  * generated AST schedule.
  * We compute the inverse and strip off the type, resulting in
@@ -2200,10 +2200,10 @@ static __isl_give isl_union_map *remove_local_accesses(
  * communicate data within the same iteration of the schedule at the
  * position where the copying of the group is inserted.
  * "node" points to this position, i.e., the depth at "node"
- * is equal to group->depth.
+ * is equal to tile->depth.
  *
  * We extract a schedule that picks out the iterations of the outer
- * group->depth dimensions and call remove_local_accesses.
+ * tile->depth dimensions and call remove_local_accesses.
  */
 static __isl_give isl_union_map *remove_local_accesses_group(
 	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
@@ -2383,42 +2383,73 @@ static isl_bool set_permutable(__isl_keep isl_schedule_node *node, void *user)
 	return isl_bool_error;
 }
 
+/* Does the subtree rooted at "node" have any suitably permutable band nodes?
+ * That is, does it have any nodes that are permutable and that
+ * have a least one coincident dimension?
+ */
+static int subtree_has_permutable_bands(__isl_keep isl_schedule_node *node)
+{
+	int any_parallelism = 0;
+
+	if (isl_schedule_node_foreach_descendant_top_down(node, &set_permutable,
+						&any_parallelism) < 0 &&
+	    !any_parallelism)
+		return -1;
+
+	return any_parallelism;
+}
+
 /* Does "schedule" contain any permutable band with at least one coincident
  * member?
  */
 static int has_any_permutable_node(__isl_keep isl_schedule *schedule)
 {
-	int any_permutable = 0;
+	isl_schedule_node *root;
+	int any_permutable;
 
-	if (isl_schedule_foreach_schedule_node_top_down(schedule,
-				    &set_permutable, &any_permutable) < 0 &&
-	    !any_permutable)
-		return -1;
+	root = isl_schedule_get_root(schedule);
+	any_permutable = subtree_has_permutable_bands(root);
+	isl_schedule_node_free(root);
 
 	return any_permutable;
 }
 
-/* Is "node" a leaf or can it be tiled and then mapped to
- * block and thread identifiers?
+/* Is "node" a candidate for mapping to block and thread identifiers?
+ * In particular, is it permutable with at least one coincident dimension?
+ * Alternatively, does the subtree rooted at "node" not contain
+ * any such permutable node?  Filter nodes are skipped in this case,
+ * because a band node will be inserted in front of the returned
+ * node and this is not possible for filter nodes that are children
+ * of set or sequence nodes.
  */
-static int is_leaf_or_tilable(__isl_keep isl_schedule_node *node)
+static int is_candidate(__isl_keep isl_schedule_node *node)
 {
+	int permutable;
+
 	if (isl_schedule_node_get_type(node) == isl_schedule_node_leaf)
 		return 1;
-	return is_permutable(node);
+	permutable = is_permutable(node);
+	if (permutable < 0 || permutable)
+		return permutable;
+	if (isl_schedule_node_get_type(node) == isl_schedule_node_filter)
+		return 0;
+	permutable = subtree_has_permutable_bands(node);
+	if (permutable < 0)
+		return -1;
+	return !permutable;
 }
 
 /* Is "node" the outermost node in its branch that can be tiled
  * and then mapped to block and thread identifiers?
- * If there are no such nodes in the branch and if "node" is a leaf,
- * then it is accepted too.
+ * If there are no such nodes in the subtree at "node" and
+ * if "node" is not a filter node, then it is accepted too.
  */
 static int is_outer_tilable(__isl_keep isl_schedule_node *node)
 {
 	int tilable;
 	isl_schedule_node *ancestor;
 
-	tilable = is_leaf_or_tilable(node);
+	tilable = is_candidate(node);
 	if (tilable < 0)
 		return -1;
 	if (!tilable)
@@ -2429,7 +2460,7 @@ static int is_outer_tilable(__isl_keep isl_schedule_node *node)
 	while (isl_schedule_node_has_parent(ancestor)) {
 		ancestor = isl_schedule_node_parent(ancestor);
 
-		tilable = is_permutable(ancestor);
+		tilable = is_candidate(ancestor);
 		if (tilable < 0 || tilable)
 			break;
 	}
@@ -2517,11 +2548,13 @@ static __isl_give isl_union_set *collect_non_private_tagged_writes(
 
 		for (j = 0; j < array->n_group; ++j) {
 			struct gpu_array_ref_group *group = array->groups[j];
+			enum ppcg_group_access_type type;
 			isl_union_set *writes_ij;
 
 			if (!group->write)
 				continue;
-			if (group->private_tile)
+			type = gpu_array_ref_group_type(group);
+			if (type == ppcg_access_private)
 				continue;
 			writes_ij = group_tagged_writes(group);
 			writes = isl_union_set_union(writes, writes_ij);
@@ -2947,12 +2980,7 @@ static int kernel_requires_unroll(struct ppcg_kernel *kernel)
  */
 static __isl_give isl_schedule_node *unroll(__isl_take isl_schedule_node *node)
 {
-	int i, n;
-
-	n = isl_schedule_node_band_n_member(node);
-	for (i = 0; i < n; ++i)
-		node = isl_schedule_node_band_member_set_ast_loop_type(node, i,
-							isl_ast_loop_unroll);
+	node = ppcg_set_schedule_node_type(node, isl_ast_loop_unroll);
 
 	node = isl_schedule_node_band_sink(node);
 
@@ -3033,18 +3061,20 @@ static __isl_give isl_union_map *anchored_non_local_accesses(
  *	write[D -> A] -> [D -> A]
  *
  * if "read" is not set.
- * D corresponds to the outer group->depth dimensions of
+ * D corresponds to the outer tile->depth dimensions of
  * the kernel schedule.
  */
 static __isl_give isl_multi_aff *create_from_access(isl_ctx *ctx,
 	struct gpu_array_ref_group *group, int read)
 {
+	struct gpu_array_tile *tile;
 	isl_space *space;
 	isl_id *id;
 
+	tile = gpu_array_ref_group_tile(group);
 	space = isl_space_copy(group->array->space);
 	space = isl_space_from_range(space);
-	space = isl_space_add_dims(space, isl_dim_in, group->depth);
+	space = isl_space_add_dims(space, isl_dim_in, tile->depth);
 	space = isl_space_wrap(space);
 	space = isl_space_map_from_set(space);
 
@@ -3081,9 +3111,12 @@ static __isl_give isl_schedule_node *add_group_write_sync(
 		node = isl_schedule_node_child(node, 0);
 		node = gpu_tree_ensure_following_sync(node, kernel);
 	} else if (shared) {
+		struct gpu_array_tile *tile;
+
+		tile = gpu_array_ref_group_tile(group);
 		node = isl_schedule_node_parent(node);
 		node = isl_schedule_node_parent(node);
-		node = gpu_tree_move_down_to_depth(node, group->depth,
+		node = gpu_tree_move_down_to_depth(node, tile->depth,
 							kernel->core);
 		node = gpu_tree_move_left_to_sync(node, kernel);
 	}
@@ -3101,14 +3134,14 @@ static __isl_give isl_schedule_node *add_group_write_sync(
  *
  * The copies are performed in the order of the array elements.
  * The copy statement instances include a reference to the outer
- * group->depth dimensions of the kernel schedule for ease of
+ * tile->depth dimensions of the kernel schedule for ease of
  * combining them with the group tiling.
  *
  * That is, the extra schedule is of the form
  *
  *	type[D -> A] -> A
  *
- * where D corresponds to the outer group->depth dimensions of
+ * where D corresponds to the outer tile->depth dimensions of
  * the kernel schedule and A to the global array.
  * This schedule is unrolled because registers are not addressable.
  *
@@ -3140,6 +3173,7 @@ static __isl_give isl_schedule_node *add_copies_group_private(
 	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
 	__isl_take isl_schedule_node *node, int read)
 {
+	struct gpu_array_tile *tile;
 	isl_union_map *access;
 	isl_union_map *prefix;
 	isl_union_set *domain;
@@ -3153,7 +3187,8 @@ static __isl_give isl_schedule_node *add_copies_group_private(
 	int empty;
 
 	kernel_depth = isl_schedule_node_get_schedule_depth(node);
-	node = gpu_tree_move_down_to_depth(node, group->depth, kernel->core);
+	tile = gpu_array_ref_group_tile(group);
+	node = gpu_tree_move_down_to_depth(node, tile->depth, kernel->core);
 
 	access = anchored_non_local_accesses(kernel, group, node, read);
 	empty = isl_union_map_is_empty(access);
@@ -3199,7 +3234,7 @@ static __isl_give isl_schedule_node *add_copies_group_private(
 		node = isl_schedule_node_graft_before(node, graft);
 	else {
 		node = isl_schedule_node_graft_after(node, graft);
-		if (kernel_depth < group->depth)
+		if (kernel_depth < tile->depth)
 			node = add_group_write_sync(node, kernel, group, 0);
 	}
 
@@ -3219,7 +3254,7 @@ static __isl_give isl_schedule_node *add_copies_group_private(
  * The copies are performed in the order of the corresponding shared
  * memory tile.
  * The copy statement instances include a reference to the outer
- * group->depth dimensions of the kernel schedule for ease of
+ * tile->depth dimensions of the kernel schedule for ease of
  * combining them with the group tiling.
  *
  * If we are performing a read from global memory to shared memory and
@@ -3235,7 +3270,7 @@ static __isl_give isl_schedule_node *add_copies_group_private(
  *
  *	type[D -> A] -> T
  *
- * where D corresponds to the outer group->depth dimensions of
+ * where D corresponds to the outer tile->depth dimensions of
  * the kernel schedule, A to the global array and T is the corresponding
  * shared memory tile.
  *
@@ -3301,8 +3336,9 @@ static __isl_give isl_schedule_node *add_copies_group_shared(
 	int kernel_depth;
 	int empty;
 
+	tile = gpu_array_ref_group_tile(group);
 	kernel_depth = isl_schedule_node_get_schedule_depth(node);
-	node = gpu_tree_move_down_to_depth(node, group->depth, kernel->core);
+	node = gpu_tree_move_down_to_depth(node, tile->depth, kernel->core);
 
 	access = anchored_non_local_accesses(kernel, group, node, read);
 	empty = isl_union_map_is_empty(access);
@@ -3318,7 +3354,6 @@ static __isl_give isl_schedule_node *add_copies_group_shared(
 
 	from_access = create_from_access(kernel->ctx, group, read);
 
-	tile = gpu_array_ref_group_tile(group);
 	ma = isl_multi_aff_copy(tile->tiling);
 	ma = isl_multi_aff_pullback_multi_aff(ma,
 					    isl_multi_aff_copy(from_access));
@@ -3366,14 +3401,14 @@ static __isl_give isl_schedule_node *add_copies_group_shared(
 		graft = isl_schedule_node_parent(graft);
 
 	if (read) {
-		if (kernel_depth < group->depth)
+		if (kernel_depth < tile->depth)
 			node = gpu_tree_ensure_sync_after_core(node, kernel);
 		node = gpu_tree_move_left_to_sync(node, kernel);
 		node = isl_schedule_node_graft_before(node, graft);
 	} else {
 		node = gpu_tree_move_right_to_sync(node, kernel);
 		node = isl_schedule_node_graft_after(node, graft);
-		if (kernel_depth < group->depth)
+		if (kernel_depth < tile->depth)
 			node = add_group_write_sync(node, kernel, group, 1);
 	}
 
@@ -3395,9 +3430,12 @@ static __isl_give isl_schedule_node *add_copies_group(
 	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
 	__isl_take isl_schedule_node *node, int read)
 {
-	if (group->private_tile)
+	enum ppcg_group_access_type type;
+
+	type = gpu_array_ref_group_type(group);
+	if (type == ppcg_access_private)
 		return add_copies_group_private(kernel, group, node, read);
-	if (group->shared_tile)
+	if (type == ppcg_access_shared)
 		return add_copies_group_shared(kernel, group, node, read);
 	return node;
 }
@@ -3436,14 +3474,7 @@ static __isl_give isl_schedule_node *add_copies(struct ppcg_kernel *kernel,
  */
 static __isl_give isl_schedule_node *atomic(__isl_take isl_schedule_node *node)
 {
-	int i, n;
-
-	n = isl_schedule_node_band_n_member(node);
-	for (i = 0; i < n; ++i)
-		node = isl_schedule_node_band_member_set_ast_loop_type(node, i,
-							isl_ast_loop_atomic);
-
-	return node;
+	return ppcg_set_schedule_node_type(node, isl_ast_loop_atomic);
 }
 
 /* Mark "node" atomic, if it is a band node.
@@ -3614,7 +3645,7 @@ static __isl_give isl_schedule_node *group_statements(
  * to be unrolled, then we perform the required unrolling.
  *
  * We save a copy of the schedule that may influence the mappings
- * to shared or private memory in kernel->shared_schedule.
+ * to shared or private memory in kernel->copy_schedule.
  *
  * Finally, we add synchronization and copy statements to the schedule tree,
  * remove the "thread" mark and create representations for the local
@@ -3734,9 +3765,8 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	}
 
 	node = gpu_tree_move_up_to_thread(node);
-	kernel->shared_schedule_dim =
-		isl_schedule_node_get_schedule_depth(node);
-	kernel->shared_schedule =
+	kernel->copy_schedule_dim = isl_schedule_node_get_schedule_depth(node);
+	kernel->copy_schedule =
 		isl_schedule_node_get_prefix_schedule_union_pw_multi_aff(node);
 
 	node = gpu_tree_move_up_to_kernel(node);
@@ -3785,12 +3815,16 @@ static __isl_give isl_schedule_node *insert_empty_permutable_band(
 }
 
 /* If "node" is the outermost permutable band that can be mapped to block and
- * thread identifiers in its branch (or a leaf with no such outer bands),
+ * thread identifiers in its branch (or the root of a subtree with
+ * no such outer bands),
  * then mark the band as such, attaching a ppcg_kernel to the mark.
  *
- * If "node" originally points to a leaf, then insert a zero-dimensional
- * permutable band such that we can assume that "node" always
- * points to a band node.
+ * If "node" is the root of a subtree without permutable bands,
+ * then insert a zero-dimensional permutable band such that
+ * we can assume that "node" always points to a band node.
+ * This includes the case where "node" already points to a band node,
+ * but one without any coincident dimension.  In this case,
+ * the extra node ensures that this original node does not get tiled.
  *
  * Tile "node" using user specified tile sizes, after splitting the band
  * if the number of specified tile sizes is smaller than the dimension
@@ -3816,7 +3850,8 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 	if (!outer)
 		return node;
 
-	if (isl_schedule_node_get_type(node) == isl_schedule_node_leaf)
+	if (isl_schedule_node_get_type(node) != isl_schedule_node_band ||
+	    !isl_schedule_node_band_member_get_coincident(node, 0))
 		node = insert_empty_permutable_band(node);
 
 	tile_len = isl_schedule_node_band_n_member(node);
@@ -3840,20 +3875,69 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 	return node;
 }
 
-/* Does the subtree rooted at "node" have any suitably permutable band nodes?
- * That is, does it have any nodes that are permutable and that
- * have a least one coincident dimension?
+/* Given a set or sequence node, return the union the filters of either all
+ * (if "only_initial" is not set) or the initial (if "only_initial" is set)
+ * direct subtrees that do not contain any suitably permutable bands
+ * (according to subtree_has_permutable_bands).
  */
-static int subtree_has_permutable_bands(__isl_keep isl_schedule_node *node)
+static __isl_give isl_union_set *get_non_parallel_subtree_filters(
+	__isl_keep isl_schedule_node *node, int only_initial)
 {
-	int any_parallelism = 0;
+	isl_space *space;
+	isl_union_set *filter;
+	int i, n;
 
-	if (isl_schedule_node_foreach_descendant_top_down(node, &set_permutable,
-						&any_parallelism) < 0 &&
-	    !any_parallelism)
-		return -1;
+	n = isl_schedule_node_n_children(node);
+	if (n < 0)
+		return NULL;
 
-	return any_parallelism;
+	node = isl_schedule_node_copy(node);
+	node = isl_schedule_node_child(node, 0);
+	filter = isl_schedule_node_filter_get_filter(node);
+	node = isl_schedule_node_parent(node);
+	space = isl_union_set_get_space(filter);
+	isl_union_set_free(filter);
+	filter = isl_union_set_empty(space);
+
+	for (i = 0; i < n; ++i) {
+		int parallelism;
+
+		node = isl_schedule_node_child(node, i);
+		parallelism = subtree_has_permutable_bands(node);
+		if (parallelism < 0) {
+			filter = isl_union_set_free(filter);
+		} else if (!parallelism) {
+			isl_union_set *filter_i;
+			filter_i = isl_schedule_node_filter_get_filter(node);
+			filter = isl_union_set_union(filter, filter_i);
+		} else if (only_initial)
+			break;
+		node = isl_schedule_node_parent(node);
+	}
+
+	isl_schedule_node_free(node);
+
+	return filter;
+}
+
+/* Given a set or sequence node, return the union of the filters of
+ * the direct subtrees that do not contain any suitably permutable bands
+ * (according to subtree_has_permutable_bands).
+ */
+static __isl_give isl_union_set *get_all_non_parallel_subtree_filters(
+	__isl_keep isl_schedule_node *node)
+{
+	return get_non_parallel_subtree_filters(node, 0);
+}
+
+/* Given a set or sequence node, return the union of the filters of
+ * the initial direct subtrees that do not contain any suitably permutable
+ * bands (according to subtree_has_permutable_bands).
+ */
+static __isl_give isl_union_set *get_initial_non_parallel_subtree_filters(
+	__isl_keep isl_schedule_node *node)
+{
+	return get_non_parallel_subtree_filters(node, 1);
 }
 
 /* Mark all variables that are accessed by the statement instances in "domain"
@@ -3899,50 +3983,40 @@ error:
  * Adjust the schedule tree in order to execute the second group
  * after the first group and return a pointer to the first group,
  * assuming there are any such subtrees.
- * Mark all local variables in "prog" that are accessed by
- * the second group as requiring a declaration on the host.
+ * If "node" points to a sequence node, then separate the initial
+ * children that do not have suitably permutable bands and
+ * return a pointer to the subsequence of children that do have such bands,
+ * assuming there are any such subtrees.
+ *
+ * In both cases, mark all local variables in "prog" that are accessed by
+ * the group without permutable bands as requiring a declaration on the host.
  */
 static __isl_give isl_schedule_node *isolate_permutable_subtrees(
 	__isl_take isl_schedule_node *node, struct gpu_prog *prog)
 {
-	isl_space *space;
 	isl_union_set *filter;
-	int i, n;
+	enum isl_schedule_node_type type;
 
 	if (!node)
 		return NULL;
-	if (isl_schedule_node_get_type(node) != isl_schedule_node_set)
-		return node;
-
-	n = isl_schedule_node_n_children(node);
-	if (n < 0)
-		return isl_schedule_node_free(node);
-
-	node = isl_schedule_node_child(node, 0);
-	filter = isl_schedule_node_filter_get_filter(node);
-	node = isl_schedule_node_parent(node);
-	space = isl_union_set_get_space(filter);
-	isl_union_set_free(filter);
-	filter = isl_union_set_empty(space);
-
-	for (i = 0; i < n; ++i) {
-		int parallelism;
-
-		node = isl_schedule_node_child(node, i);
-		parallelism = subtree_has_permutable_bands(node);
-		if (parallelism < 0) {
+	type = isl_schedule_node_get_type(node);
+	if (type == isl_schedule_node_set) {
+		filter = get_all_non_parallel_subtree_filters(node);
+		if (!filter)
 			node = isl_schedule_node_free(node);
-		} else if (!parallelism) {
-			isl_union_set *filter_i;
-			filter_i = isl_schedule_node_filter_get_filter(node);
-			filter = isl_union_set_union(filter, filter_i);
-		}
-		node = isl_schedule_node_parent(node);
-	}
 
-	if (declare_accessed_local_variables(prog, filter) < 0)
-		node = isl_schedule_node_free(node);
-	node = isl_schedule_node_order_after(node, filter);
+		if (declare_accessed_local_variables(prog, filter) < 0)
+			node = isl_schedule_node_free(node);
+		node = isl_schedule_node_order_after(node, filter);
+	} else if (type == isl_schedule_node_sequence) {
+		filter = get_initial_non_parallel_subtree_filters(node);
+		if (!filter)
+			node = isl_schedule_node_free(node);
+
+		if (declare_accessed_local_variables(prog, filter) < 0)
+			node = isl_schedule_node_free(node);
+		node = isl_schedule_node_order_before(node, filter);
+	}
 
 	return node;
 }
@@ -3989,51 +4063,6 @@ static __isl_give isl_schedule_node *mark_kernels(struct gpu_gen *gen,
 {
 	return isl_schedule_node_map_descendant_bottom_up(node,
 						&mark_outer_permutable, gen);
-}
-
-/* Save the schedule "schedule" to a file called "filename".
- * The schedule is printed in block style.
- */
-static void save_schedule(__isl_keep isl_schedule *schedule,
-	const char *filename)
-{
-	FILE *file;
-	isl_ctx *ctx;
-	isl_printer *p;
-
-	if (!schedule)
-		return;
-
-	file = fopen(filename, "w");
-	if (!file) {
-		fprintf(stderr, "Unable to open '%s' for writing\n", filename);
-		return;
-	}
-	ctx = isl_schedule_get_ctx(schedule);
-	p = isl_printer_to_file(ctx, file);
-	p = isl_printer_set_yaml_style(p, ISL_YAML_STYLE_BLOCK);
-	p = isl_printer_print_schedule(p, schedule);
-	isl_printer_free(p);
-	fclose(file);
-}
-
-/* Load and return a schedule from a file called "filename".
- */
-static __isl_give isl_schedule *load_schedule(isl_ctx *ctx,
-	const char *filename)
-{
-	FILE *file;
-	isl_schedule *schedule;
-
-	file = fopen(filename, "r");
-	if (!file) {
-		fprintf(stderr, "Unable to open '%s' for reading\n", filename);
-		return NULL;
-	}
-	schedule = isl_schedule_read_from_file(ctx, file);
-	fclose(file);
-
-	return schedule;
 }
 
 /* Construct schedule constraints from the dependences in prog->scop and
@@ -4273,30 +4302,27 @@ static __isl_give isl_schedule *determine_properties_original_schedule(
 	return schedule;
 }
 
+/* Compute a schedule or determine the properties of the original schedule
+ * depending on the value of the "reschedule" option.
+ */
+static __isl_give isl_schedule *compute_or_set_properties(void *user)
+{
+	struct gpu_gen *gen = user;
+
+	if (gen->options->reschedule)
+		return compute_schedule(gen);
+	else
+		return determine_properties_original_schedule(gen);
+}
+
 /* Obtain a schedule for the scop, by reading it from
  * a file, by computing one or by determining the properties
  * of the original schedule.
  */
 static __isl_give isl_schedule *get_schedule(struct gpu_gen *gen)
 {
-	isl_schedule *schedule;
-
-	if (gen->options->load_schedule_file) {
-		schedule = load_schedule(gen->ctx,
-					gen->options->load_schedule_file);
-	} else {
-		if (gen->options->reschedule)
-			schedule = compute_schedule(gen);
-		else
-			schedule = determine_properties_original_schedule(gen);
-		if (gen->options->save_schedule_file)
-			save_schedule(schedule,
-					gen->options->save_schedule_file);
-	}
-	if (gen->options->debug->dump_schedule)
-		isl_schedule_dump(schedule);
-
-	return schedule;
+	return ppcg_get_schedule(gen->ctx, gen->options,
+				&compute_or_set_properties, gen);
 }
 
 /* Construct the string "<a>_<b>".
