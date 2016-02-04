@@ -45,7 +45,7 @@ ISL_ARGS_START(struct options, options_args)
 ISL_ARG_CHILD(struct options, pet, "pet", &pet_options_args, "pet options")
 ISL_ARG_CHILD(struct options, ppcg, NULL, &ppcg_options_args, "ppcg options")
 ISL_ARG_STR(struct options, output, 'o', NULL,
-	"filename", NULL, "output filename (c and opencl targets)")
+	"filename", NULL, "output filename")
 ISL_ARG_ARG(struct options, input, "input", NULL)
 ISL_ARG_VERSION(print_version)
 ISL_ARGS_END
