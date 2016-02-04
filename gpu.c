@@ -5258,6 +5258,7 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	if (!prog)
 		return isl_printer_free(p);
 
+	prog->id = gen->prog_id++;
 	context = isl_set_copy(prog->context);
 	guard = isl_union_set_params(isl_union_set_copy(prog->scop->domain));
 	prog->context = isl_set_intersect(prog->context, isl_set_copy(guard));
@@ -5315,6 +5316,7 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	gen.sizes = extract_sizes_from_str(ctx, options->sizes);
 	gen.options = options;
 	gen.kernel_id = 0;
+	gen.prog_id = 0;
 	gen.print = print;
 	gen.print_user = user;
 	gen.types.n = 0;
