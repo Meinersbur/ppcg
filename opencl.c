@@ -38,13 +38,12 @@ struct opencl_info {
 	struct ppcg_options *options;
 	const char *input;
 	const char *output;
-	char kernel_c_name[PATH_MAX];
+	char kernel_cl_name[PATH_MAX];
 
 	isl_printer *kprinter;
 
 	FILE *host_c;
 	FILE *kernel_cl;
-	FILE *kernel_c;
 };
 
 /* Open the file called "name" for writing or print an error message.
@@ -88,9 +87,9 @@ static int opencl_open_files(struct opencl_info *info)
 		info->host_c = open_or_croak(name);
 	}
 
-	memcpy(info->kernel_c_name, name, len);
-	strcpy(info->kernel_c_name + len, "_kernel.cl");
-	info->kernel_cl = open_or_croak(info->kernel_c_name);
+	memcpy(info->kernel_cl_name, name, len);
+	strcpy(info->kernel_cl_name + len, "_kernel.cl");
+	info->kernel_cl = open_or_croak(info->kernel_cl_name);
 
 	if (!info->host_c || !info->kernel_cl)
 		return -1;
@@ -104,7 +103,7 @@ static int opencl_open_files(struct opencl_info *info)
 		fputs("#include <prl_scop.h>\n", info->host_c);
 	if (info->options->opencl_embed_kernel_code) {
 		fprintf(info->host_c, "#include \"%s\"\n\n",
-			info->kernel_c_name);
+			info->kernel_cl_name);
 	}
 
 	for (i = 0; i < info->options->opencl_n_include_file; ++i) {
@@ -1287,7 +1286,7 @@ static __isl_give isl_printer *opencl_setup(__isl_take isl_printer *p,
 	} else {
 		p = isl_printer_print_str(p, "opencl_build_program_from_file("
 						"context, device, \"");
-		p = isl_printer_print_str(p, info->kernel_c_name);
+		p = isl_printer_print_str(p, info->kernel_cl_name);
 		p = isl_printer_print_str(p, "\", \"");
 	}
 
@@ -1324,7 +1323,7 @@ static __isl_give isl_printer *opencl_setup(__isl_take isl_printer *p,
 			p = isl_printer_print_str(p, "prl_scop_program_from_str(__ppcg_scopinst, &__ppcg_program, kernel_code, sizeof(kernel_code), ");
 		} else {
 			p = isl_printer_print_str(p, "prl_scop_program_from_file(__ppcg_scopinst, &__ppcg_program, \"");
-			p = isl_printer_print_str(p, info->kernel_c_name);
+			p = isl_printer_print_str(p, info->kernel_cl_name);
 			p = isl_printer_print_str(p, "\", ");
 		}
 		if (info->options->opencl_compiler_options) {
