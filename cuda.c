@@ -633,6 +633,29 @@ static __isl_give isl_printer *free_device_arrays(__isl_take isl_printer *p,
 	return p;
 }
 
+struct print_code_user {
+	struct cuda_info *cuda;
+	struct gpu_prog *prog;
+	 isl_ast_node *tree;
+};
+
+static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user) {
+	struct print_code_user *tuser = user;
+	struct cuda_info *cuda = tuser->cuda;
+	struct gpu_prog *prog = tuser->prog;
+	isl_ast_node *tree = tuser->tree;
+
+	p = ppcg_print_macros(p, tree);
+	p = print_cuda_macros(p);//TODO: Get rid of macros
+	p = gpu_print_local_declarations(p, prog);
+	p = declare_device_arrays(p, prog);
+	p = allocate_device_arrays(p, prog);
+	p = print_host_code(p, prog, tree, cuda);
+	p = free_device_arrays(p, prog);
+
+	return p;
+}
+
 /* Given a gpu_prog "prog" and the corresponding transformed AST
  * "tree", print the entire CUDA code to "p".
  * "types" collects the types for which a definition has already
@@ -640,7 +663,7 @@ static __isl_give isl_printer *free_device_arrays(__isl_take isl_printer *p,
  */
 static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-	struct gpu_types *types, void *user)
+	struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user)
 {
 	struct cuda_info *cuda = user;
 	isl_printer *kernel, *header;
@@ -681,13 +704,9 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	code = isl_printer_end_line(code);
 
 	code = ppcg_start_block(code);
-	code = ppcg_print_macros(code, tree);
-	code = print_cuda_macros(code);//TODO: Get rid of macros
-	code = gpu_print_local_declarations(code, prog);
-	code = declare_device_arrays(code, prog);
-	code = allocate_device_arrays(code, prog);
-	code = print_host_code(code, prog, tree, cuda);
-	code = free_device_arrays(code, prog);
+	code = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, code);
+	struct print_code_user tuser = {cuda,prog,tree};
+	code = ppcg_print_guarded(code, guard, context, &print_code, &tuser);
 	code = ppcg_end_block(code);
 
 	char *codestr = isl_printer_get_str(code);

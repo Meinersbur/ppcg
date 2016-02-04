@@ -112,6 +112,7 @@ static int opencl_open_files(struct opencl_info *info)
 		fprintf(info->host_c, "#include <stdio.h>\n");
 		fprintf(info->host_c, "#include \"ocl_utilities.h\"\n");
 	} else {
+		fprintf(info->host_c, "#include \"%s\"\n", info->kernel_h_name); // TODO: Absolute path
 		fputs("#include <prl_scop.h>\n", info->kernel_c);
 	}
 
@@ -1422,12 +1423,37 @@ static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct
 	return p;
 }
 
+struct print_code_user {
+	struct opencl_info *opencl;
+	struct gpu_prog *prog;
+	 isl_ast_node *tree;
+};
+
+static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user) {
+	struct print_code_user *tuser = user;
+	struct opencl_info *opencl = tuser->opencl;
+	struct gpu_prog *prog = tuser->prog;
+	isl_ast_node *tree = tuser->tree;
+
+	p = opencl_print_host_macros(p, opencl);
+	p = gpu_print_local_declarations(p, prog);
+	p = opencl_declare_device_arrays(p, prog, opencl);
+	p = opencl_setup(p, opencl->input, opencl);
+	p = opencl_allocate_device_arrays(p, prog, opencl);
+	p = opencl_print_host_code(p, prog, tree, opencl);
+	if (opencl->options->target==PPCG_TARGET_OPENCL)
+		p = opencl_release_device_arrays(p, prog);
+	p = opencl_release_cl_objects(p, opencl);
+
+	return p;
+}
+
 /* Given a gpu_prog "prog" and the corresponding transformed AST
  * "tree", print the entire OpenCL code to "p".
  */
 static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-	struct gpu_types *types, void *user)
+	struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user)
 {
 	struct opencl_info *opencl = user;
 
@@ -1467,15 +1493,9 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	code = isl_printer_end_line(code);
 
 	code = ppcg_start_block(code);
-	code = opencl_print_host_macros(code, opencl);
-	code = gpu_print_local_declarations(code, prog);
-	code = opencl_declare_device_arrays(code, prog, opencl);
-	code = opencl_setup(code, opencl->input, opencl);
-	code = opencl_allocate_device_arrays(code, prog, opencl);
-	code = opencl_print_host_code(code, prog, tree, opencl);
-	if (opencl->options->target==PPCG_TARGET_OPENCL)
-		code = opencl_release_device_arrays(code, prog);
-	code = opencl_release_cl_objects(code, opencl);
+	code = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, code);
+	struct print_code_user tuser = {opencl,prog,tree};
+	code = ppcg_print_guarded(code, guard, context, &print_code, &tuser);
 	code = ppcg_end_block(code);
 
 	isl_printer_free(code);

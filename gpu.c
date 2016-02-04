@@ -5171,11 +5171,11 @@ static struct gpu_stmt *extract_stmts(isl_ctx *ctx, struct ppcg_scop *scop,
 
 /* Callback for ppcg_print_guarded that calls the callback for generate_gpu.
  */
-static __isl_give isl_printer *print_gpu(__isl_take isl_printer *p, void *user)
+static __isl_give isl_printer *print_gpu(__isl_take isl_printer *p, __isl_take isl_set *guard, __isl_take isl_set *context, void *user)
 {
 	struct gpu_gen *gen = user;
 
-	return gen->print(p, gen->prog, gen->tree, &gen->types,
+	return gen->print(p, gen->prog, gen->tree, &gen->types, guard, context,
 			    gen->print_user);
 }
 
@@ -5278,9 +5278,10 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	} else {
 		schedule = map_to_device(gen, schedule);
 		gen->tree = generate_code(gen, schedule);
-		p = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, p);
+		//p = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, p);
 		p = ppcg_print_exposed_declarations(p, prog->scop);
-		p = ppcg_print_guarded(p, guard, context, &print_gpu, gen);
+		p = print_gpu(p, guard,context, gen);
+		//p = ppcg_print_guarded(p, guard, context, &print_gpu, gen);
 		isl_ast_node_free(gen->tree);
 	}
 
@@ -5306,7 +5307,7 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	struct ppcg_options *options,
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
 		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-		struct gpu_types *types, void *user), void *user)
+		struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user), void *user)
 {
 	struct gpu_gen gen;
 	int r;
