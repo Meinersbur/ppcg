@@ -1435,6 +1435,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
 	struct gpu_prog *prog = tuser->prog;
 	isl_ast_node *tree = tuser->tree;
 
+	p = ppcg_start_block(p);
 	p = opencl_print_host_macros(p, opencl);
 	p = gpu_print_local_declarations(p, prog);
 	p = opencl_declare_device_arrays(p, prog, opencl);
@@ -1444,6 +1445,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
 	if (opencl->options->target==PPCG_TARGET_OPENCL)
 		p = opencl_release_device_arrays(p, prog);
 	p = opencl_release_cl_objects(p, opencl);
+	p = ppcg_end_block(p);
 
 	return p;
 }

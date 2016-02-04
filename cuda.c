@@ -645,6 +645,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
 	struct gpu_prog *prog = tuser->prog;
 	isl_ast_node *tree = tuser->tree;
 
+	p = ppcg_start_block(p);
 	p = ppcg_print_macros(p, tree);
 	p = print_cuda_macros(p);//TODO: Get rid of macros
 	p = gpu_print_local_declarations(p, prog);
@@ -652,6 +653,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
 	p = allocate_device_arrays(p, prog);
 	p = print_host_code(p, prog, tree, cuda);
 	p = free_device_arrays(p, prog);
+	p = ppcg_end_block(p);
 
 	return p;
 }
