@@ -62,6 +62,7 @@ run_tests () {
 		name=`basename $i`
 		name=${name%.c}
 		source_opt="${OUTDIR}/$name.$ext.c"
+		kernel_opt="${OUTDIR}/$name.${ext}_kernel.c"
 		prog_orig=${OUTDIR}/$name.orig${EXEEXT}
 		prog_opt=${OUTDIR}/$name.$ext${EXEEXT}
 		output_orig=${OUTDIR}/$name.orig.out
@@ -76,12 +77,13 @@ run_tests () {
 		$CC -I $DIR/$dir $CPPFLAGS $DIR/$i -o $prog_orig \
 			$DIR/utilities/polybench.c $CFLAGS
 		$prog_orig 2> $output_orig
+
 		if [ $verbose = "yes" ]; then
-			echo $CC -I $DIR/$dir $CPPFLAGS $source_opt \
+			echo $CC -I $DIR/$dir $CPPFLAGS $source_opt $kernel_opt \
 				-o $prog_opt $DIR/utilities/polybench.c \
 				$CFLAGS $cc_options
 		fi
-		$CC -I $DIR/$dir $CPPFLAGS $source_opt -o $prog_opt \
+		$CC -I $DIR/$dir $CPPFLAGS $source_opt $kernel_opt -o $prog_opt \
 			$DIR/utilities/polybench.c $CFLAGS $cc_options || exit
 
 		if [ $verbose = "yes" ]; then

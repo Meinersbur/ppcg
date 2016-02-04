@@ -464,10 +464,8 @@ static void print_kernel(struct gpu_prog *prog, struct ppcg_kernel *kernel,
 
 	p = print_kernel_vars(p, kernel);
 	p = isl_printer_end_line(p);
-#if 1
 	p = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, p);
 	p = ppcg_print_macros(p, kernel->tree);
-#endif
 
 	print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
@@ -612,10 +610,6 @@ static __isl_give isl_printer *print_host_code(__isl_take isl_printer *p,
 	print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 						&print_host_user, &data);
-
-#if 0
-	p = ppcg_print_macros(p, tree);
-#endif
 	p = isl_ast_node_print(tree, p, print_options);
 
 	return p;
@@ -634,71 +628,6 @@ static __isl_give isl_printer *free_device_arrays(__isl_take isl_printer *p,
 		p = isl_printer_print_str(p, prog->array[i].name);
 		p = isl_printer_print_str(p, "));");
 		p = isl_printer_end_line(p);
-	}
-
-	return p;
-}
-
-static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct gpu_prog *prog) {
-	p = isl_printer_print_str(p, "__ppcg_scop");
-	p = isl_printer_print_int(p, prog->id);
-	return p;
-}
-
-static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struct gpu_prog *prog,  __isl_give isl_printer *(*callback)(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, isl_id *param, struct gpu_array_info *array,  void *user), void *user) {
-	bool firstarg = true;
-
-	// Parameter arguments
-	int n_params = isl_set_n_param(prog->context);
-	for (int i = 0; i < n_params; ++i) {
-		isl_id *id = isl_set_get_dim_id(prog->context, isl_dim_param, i);
-		p = (*callback)(p, prog, firstarg, id, NULL, user);
-		isl_id_free(id);
-		firstarg = false;
-	}
-
-	// Array arguments
-	for (int i = 0; i < prog->n_array; ++i) {
-		struct gpu_array_info *array = &prog->array[i];
-		if (!gpu_array_requires_device_allocation(array))
-			continue;
-
-		p = (*callback)(p, prog, firstarg, NULL, array, user);
-		firstarg = false;
-	}
-
-	return p;
-}
-
-static __isl_give isl_printer * callback_print_prog_parameter(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, __isl_keep isl_id *param, struct gpu_array_info *array, void *user) {
-	if (!first)
-		p = isl_printer_print_str(p, ", ");
-
-	if (param) {
-		p = isl_printer_print_str(p, "int ");
-		p = isl_printer_print_str(p, isl_id_get_name(param));
-	}
-	if (array) {
-		p = isl_printer_print_str(p, array->type);
-		p = isl_printer_print_str(p, " *");
-		p = isl_printer_print_str(p, array->name);
-	}
-
-	return p;
-}
-
-static __isl_give isl_printer * callback_print_prog_argument(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, __isl_keep isl_id *param, struct gpu_array_info *array, void *user) {
-	if (!first)
-		p = isl_printer_print_str(p, ", ");
-
-	if (param) {
-		p = isl_printer_print_str(p, isl_id_get_name(param));
-	}
-	if (array) {
-		p = isl_printer_print_str(p, "(");
-		p = isl_printer_print_str(p, array->type); // cast away e.g. const
-		p = isl_printer_print_str(p, "*)&");
-		p = isl_printer_print_str(p, array->name);
 	}
 
 	return p;
@@ -730,23 +659,15 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 
 	// Print function declaration into _kernel.h
 	header = isl_printer_start_line(header);
-	header = isl_printer_print_str(header, "void ");
-	header = print_prog_name(header, prog);
-	header = isl_printer_print_str(header, "(");
-	header = foreach_prog_arg(header, prog, &callback_print_prog_parameter, NULL);
-	header = isl_printer_print_str(header, ");");
+	header = gpu_print_prog_declaration(header, prog);
+	header = isl_printer_print_str(header, ";");
 	header = isl_printer_end_line(header);
 
 	isl_printer_free(header);
 
 
 	// Print function call into _host.c
-	p = isl_printer_start_line(p);
-	p = print_prog_name(p, prog);
-	p = isl_printer_print_str(p, "(");
-	p = foreach_prog_arg(p, prog, &callback_print_prog_argument, NULL);
-	p = isl_printer_print_str(p, ");");
-	p = isl_printer_end_line(p);
+	p = gpu_print_prog_invocation(p, prog);
 
 
 	// Not printing directly to cuda->kernel_cu because kernel generation would interleave it.
@@ -756,11 +677,7 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	// Print generated code into _kernel.cu
 	code = isl_printer_print_str(code, "\n");
 	code = isl_printer_start_line(code);
-	code = isl_printer_print_str(code, "void ");
-	code = print_prog_name(code, prog);
-	code = isl_printer_print_str(code, "(");
-	code = foreach_prog_arg(code, prog, &callback_print_prog_parameter, NULL);
-	code = isl_printer_print_str(code, ")");
+	code = gpu_print_prog_declaration(code, prog);
 	code = isl_printer_end_line(code);
 
 	code = ppcg_start_block(code);

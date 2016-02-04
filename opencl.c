@@ -38,11 +38,15 @@ struct opencl_info {
 	struct ppcg_options *options;
 	const char *input;
 	const char *output;
+	char kernel_h_name[PATH_MAX];
+	char kernel_c_name[PATH_MAX];
 	char kernel_cl_name[PATH_MAX];
 
 	isl_printer *kprinter;
 
 	FILE *host_c;
+	FILE *kernel_h;
+	FILE *kernel_c;
 	FILE *kernel_cl;
 };
 
@@ -87,11 +91,19 @@ static int opencl_open_files(struct opencl_info *info)
 		info->host_c = open_or_croak(name);
 	}
 
+	memcpy(info->kernel_h_name, name, len);
+	strcpy(info->kernel_h_name + len, "_kernel.h");
+	info->kernel_h = open_or_croak(info->kernel_h_name);
+
+	memcpy(info->kernel_c_name, name, len);
+	strcpy(info->kernel_c_name + len, "_kernel.c");
+	info->kernel_c = open_or_croak(info->kernel_c_name);
+
 	memcpy(info->kernel_cl_name, name, len);
 	strcpy(info->kernel_cl_name + len, "_kernel.cl");
 	info->kernel_cl = open_or_croak(info->kernel_cl_name);
 
-	if (!info->host_c || !info->kernel_cl)
+	if (!info->host_c || !info->kernel_h || !info->kernel_c || !info->kernel_cl)
 		return -1;
 
 
@@ -99,10 +111,12 @@ static int opencl_open_files(struct opencl_info *info)
 		fprintf(info->host_c, "#include <assert.h>\n");
 		fprintf(info->host_c, "#include <stdio.h>\n");
 		fprintf(info->host_c, "#include \"ocl_utilities.h\"\n");
-	} else
-		fputs("#include <prl_scop.h>\n", info->host_c);
+	} else {
+		fputs("#include <prl_scop.h>\n", info->kernel_c);
+	}
+
 	if (info->options->opencl_embed_kernel_code) {
-		fprintf(info->host_c, "#include \"%s\"\n\n",
+		fprintf(info->kernel_c, "#include \"%s\"\n\n",
 			info->kernel_cl_name);
 	}
 
@@ -201,6 +215,10 @@ static int opencl_close_files(struct opencl_info *info)
 	}
 	if (info->host_c)
 		fclose(info->host_c);
+	if (info->kernel_h)
+		fclose(info->kernel_h);
+	if (info->kernel_c)
+		fclose(info->kernel_c);
 
 	return r;
 }
@@ -1398,6 +1416,12 @@ static __isl_give isl_printer *opencl_release_device_arrays(
 	return p;
 }
 
+static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_print_str(p, "__ppcg_prog");
+	p = isl_printer_print_int(p, prog->id);
+	return p;
+}
+
 /* Given a gpu_prog "prog" and the corresponding transformed AST
  * "tree", print the entire OpenCL code to "p".
  */
@@ -1419,23 +1443,42 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	if (!opencl->kprinter)
 		return isl_printer_free(p);
 
-	p = ppcg_start_block(p);
 
-	p = opencl_print_host_macros(p, opencl);
+	p = gpu_print_prog_invocation(p, prog);
 
-	p = gpu_print_local_declarations(p, prog);
-	p = opencl_declare_device_arrays(p, prog, opencl);
-	p = opencl_setup(p, opencl->input, opencl);
-	p = opencl_allocate_device_arrays(p, prog, opencl);
 
-	p = opencl_print_host_code(p, prog, tree, opencl);
+	isl_printer *header = isl_printer_to_file(isl_printer_get_ctx(p), opencl->kernel_h);
+	header = isl_printer_set_output_format(header, ISL_FORMAT_C);
 
-	if (opencl->options->target==PPCG_TARGET_OPENCL) {
-	p = opencl_release_device_arrays(p, prog);
-	}
-	p = opencl_release_cl_objects(p, opencl);
+	header = isl_printer_start_line(header);
+	header = gpu_print_prog_declaration(header, prog);
+	header = isl_printer_print_str(header, ";");
+	header = isl_printer_end_line(header);
 
-	p = ppcg_end_block(p);
+	isl_printer_free(header);
+
+
+	isl_printer *code = isl_printer_to_file(isl_printer_get_ctx(p), opencl->kernel_c);
+	code = isl_printer_set_output_format(code, ISL_FORMAT_C);
+
+	code = isl_printer_print_str(code, "\n");
+	code = isl_printer_start_line(code);
+	code = gpu_print_prog_declaration(code, prog);
+	code = isl_printer_end_line(code);
+
+	code = ppcg_start_block(code);
+	code = opencl_print_host_macros(code, opencl);
+	code = gpu_print_local_declarations(code, prog);
+	code = opencl_declare_device_arrays(code, prog, opencl);
+	code = opencl_setup(code, opencl->input, opencl);
+	code = opencl_allocate_device_arrays(code, prog, opencl);
+	code = opencl_print_host_code(code, prog, tree, opencl);
+	if (opencl->options->target==PPCG_TARGET_OPENCL)
+		code = opencl_release_device_arrays(code, prog);
+	code = opencl_release_cl_objects(code, opencl);
+	code = ppcg_end_block(code);
+
+	isl_printer_free(code);
 
 	return p;
 }

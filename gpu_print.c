@@ -8,6 +8,7 @@
  */
 
 #include <string.h>
+#include <stdbool.h>
 
 #include <isl/aff.h>
 
@@ -253,3 +254,89 @@ __isl_give isl_printer *gpu_print_types(__isl_take isl_printer *p,
 
 	return p;
 }
+
+
+static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_print_str(p, "__ppcg_prog");
+	p = isl_printer_print_int(p, prog->id);
+	return p;
+}
+
+static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struct gpu_prog *prog,  __isl_give isl_printer *(*callback)(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, isl_id *param, struct gpu_array_info *array,  void *user), void *user) {
+	bool firstarg = true;
+
+	// Parameter arguments
+	int n_params = isl_set_n_param(prog->context);
+	for (int i = 0; i < n_params; ++i) {
+		isl_id *id = isl_set_get_dim_id(prog->context, isl_dim_param, i);
+		p = (*callback)(p, prog, firstarg, id, NULL, user);
+		isl_id_free(id);
+		firstarg = false;
+	}
+
+	// Array arguments
+	for (int i = 0; i < prog->n_array; ++i) {
+		struct gpu_array_info *array = &prog->array[i];
+		if (!gpu_array_requires_device_allocation(array))
+			continue;
+
+		p = (*callback)(p, prog, firstarg, NULL, array, user);
+		firstarg = false;
+	}
+
+	return p;
+}
+
+static __isl_give isl_printer * callback_print_prog_parameter(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, __isl_keep isl_id *param, struct gpu_array_info *array, void *user) {
+	if (!first)
+		p = isl_printer_print_str(p, ", ");
+
+	if (param) {
+		p = isl_printer_print_str(p, "int ");
+		p = isl_printer_print_str(p, isl_id_get_name(param));
+	}
+	if (array) {
+		p = isl_printer_print_str(p, array->type);
+		p = isl_printer_print_str(p, " *");
+		p = isl_printer_print_str(p, array->name);
+	}
+
+	return p;
+}
+
+static __isl_give isl_printer * callback_print_prog_argument(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, __isl_keep isl_id *param, struct gpu_array_info *array, void *user) {
+	if (!first)
+		p = isl_printer_print_str(p, ", ");
+
+	if (param) {
+		p = isl_printer_print_str(p, isl_id_get_name(param));
+	}
+	if (array) {
+		p = isl_printer_print_str(p, "(");
+		p = isl_printer_print_str(p, array->type); // cast away e.g. const
+		p = isl_printer_print_str(p, "*)&");
+		p = isl_printer_print_str(p, array->name);
+	}
+
+	return p;
+}
+
+__isl_give isl_printer *gpu_print_prog_declaration(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_print_str(p, "void ");
+	p = print_prog_name(p, prog);
+	p = isl_printer_print_str(p, "(");
+	p = foreach_prog_arg(p, prog, &callback_print_prog_parameter, NULL);
+	p = isl_printer_print_str(p, ")");
+	return p;
+}
+
+__isl_give isl_printer *gpu_print_prog_invocation(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_start_line(p);
+	p = print_prog_name(p, prog);
+	p = isl_printer_print_str(p, "(");
+	p = foreach_prog_arg(p, prog, &callback_print_prog_argument, NULL);
+	p = isl_printer_print_str(p, ");");
+	p = isl_printer_end_line(p);
+	return p;
+}
+
