@@ -43,6 +43,7 @@ struct opencl_info {
 	isl_printer *kprinter;
 
 	FILE *host_c;
+	FILE *kernel_cl;
 	FILE *kernel_c;
 };
 
@@ -89,16 +90,17 @@ static int opencl_open_files(struct opencl_info *info)
 
 	memcpy(info->kernel_c_name, name, len);
 	strcpy(info->kernel_c_name + len, "_kernel.cl");
-	info->kernel_c = open_or_croak(info->kernel_c_name);
+	info->kernel_cl = open_or_croak(info->kernel_c_name);
 
-	if (!info->host_c || !info->kernel_c)
+	if (!info->host_c || !info->kernel_cl)
 		return -1;
 
-	fprintf(info->host_c, "#include <assert.h>\n");
-	fprintf(info->host_c, "#include <stdio.h>\n");
-	if (info->options->target == PPCG_TARGET_OPENCL)
-	fprintf(info->host_c, "#include \"ocl_utilities.h\"\n");
-	else
+
+	if (info->options->target == PPCG_TARGET_OPENCL) {
+		fprintf(info->host_c, "#include <assert.h>\n");
+		fprintf(info->host_c, "#include <stdio.h>\n");
+		fprintf(info->host_c, "#include \"ocl_utilities.h\"\n");
+	} else
 		fputs("#include <prl_scop.h>\n", info->host_c);
 	if (info->options->opencl_embed_kernel_code) {
 		fprintf(info->host_c, "#include \"%s\"\n\n",
@@ -173,12 +175,12 @@ static int opencl_write_kernel_file(struct opencl_info *opencl)
 		return -1;
 
 	if (opencl->options->opencl_embed_kernel_code) {
-		fprintf(opencl->kernel_c,
+		fprintf(opencl->kernel_cl,
 			"static const char kernel_code[] = \"\\n\"");
-		opencl_print_as_c_string(raw, opencl->kernel_c);
-		fprintf(opencl->kernel_c, ";\n");
+		opencl_print_as_c_string(raw, opencl->kernel_cl);
+		fprintf(opencl->kernel_cl, ";\n");
 	} else
-		fprintf(opencl->kernel_c, "%s", raw);
+		fprintf(opencl->kernel_cl, "%s", raw);
 
 	free(raw);
 
@@ -194,9 +196,9 @@ static int opencl_close_files(struct opencl_info *info)
 {
 	int r = 0;
 
-	if (info->kernel_c) {
+	if (info->kernel_cl) {
 		r = opencl_write_kernel_file(info);
-		fclose(info->kernel_c);
+		fclose(info->kernel_cl);
 	}
 	if (info->host_c)
 		fclose(info->host_c);
