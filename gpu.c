@@ -1799,7 +1799,7 @@ static __isl_give isl_ast_expr *gpu_array_info_linearize_index(
 		isl_pw_aff *bound_i;
 		isl_ast_expr *expr_i;
 
-		bound_i = array->bound[i];
+		bound_i = isl_pw_aff_copy(array->bound[i]);
 		expr_i = isl_ast_build_expr_from_pw_aff(build, bound_i);
 		res = isl_ast_expr_mul(res, expr_i);
 
