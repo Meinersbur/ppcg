@@ -1,11 +1,15 @@
 #!/bin/sh
 
 keep=no
+verbose=no
 
 for option; do
 	case "$option" in
 		--keep)
 			keep=yes
+			;;
+		--verbose)
+			verbose=yes
 			;;
 	esac
 done
@@ -37,6 +41,7 @@ run_tests () {
 		name=`basename $i`
 		name="${name%.c}"
 		out_c="${OUTDIR}/${subdir}/$name.ppcg.c"
+		out_kernel_c="${OUTDIR}/${subdir}/$name.ppcg_kernel.c"
 		out="${OUTDIR}/${subdir}/$name.ppcg$EXEEXT"
 		options="--target=opencl --opencl-no-use-gpu $ppcg_options"
 		functions="$srcdir/tests/${name}_opencl_functions.cl"
@@ -44,9 +49,12 @@ run_tests () {
 			options="$options --opencl-include-file=$functions"
 			options="$options --opencl-compiler-options=-I."
 		fi
+		if [ $verbose = "yes" ]; then
+			echo "./ppcg$EXEEXT $options $i -o $out_c"
+		fi
 		./ppcg$EXEEXT $options $i -o "$out_c" || exit
 		$CC $CFLAGS -I "$srcdir" "$srcdir/ocl_utilities.c" -lOpenCL \
-			-I. "$out_c" -o "$out" || exit
+			-I. "$out_c" "$out_kernel_c" -o "$out" || exit
 		$out || exit
 	done
 }

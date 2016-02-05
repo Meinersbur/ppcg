@@ -185,7 +185,7 @@ static int extract_array_info(struct gpu_prog *prog,
 	info->name = strdup(name);
 	info->n_index = n_index;
 	info->bound = bounds;
-	info->linearize = prog->scop->options->linearize_device_arrays;
+	info->linearize = 1;//prog->scop->options->linearize_device_arrays;
 
 	info->type = strdup(pa->element_type);
 	info->size = pa->element_size;
@@ -1446,6 +1446,17 @@ static int find_array_index(struct ppcg_kernel *kernel, const char *name)
 	return -1;
 }
 
+static struct gpu_array_info *find_array_info(struct gpu_prog *prog, const char *name)
+{
+	int i;
+
+	for (i = 0; i < prog->n_array; ++i)
+		if (!strcmp(name, prog->array[i].name))
+			return &prog->array[i];
+
+	return NULL;
+}
+
 /* Internal data structure for the index and AST expression transformation
  * callbacks for pet_stmt_build_ast_exprs.
  *
@@ -1466,6 +1477,7 @@ static int find_array_index(struct ppcg_kernel *kernel, const char *name)
  * to the current kernel.
  */
 struct ppcg_transform_data {
+	struct gpu_prog *prog;
 	struct ppcg_kernel *kernel;
 	struct gpu_stmt_access *accesses;
 	isl_pw_multi_aff *iterator_map;
@@ -1554,12 +1566,10 @@ static __isl_give isl_multi_pw_aff *transform_index(
 	isl_pw_multi_aff *sched2depth;
 
 	data->array = NULL;
+	data->local_array = NULL;
 
 	iterator_map = isl_pw_multi_aff_copy(data->iterator_map);
 	index = isl_multi_pw_aff_pullback_pw_multi_aff(index, iterator_map);
-
-	if (!data->kernel)
-		return index;
 
 	access = find_access(data->accesses, ref_id);
 	if (!access)
@@ -1568,12 +1578,19 @@ static __isl_give isl_multi_pw_aff *transform_index(
 		return index;
 
 	name = get_outer_array_name(access->access);
+
+	data->global = 1;
+	data->array = find_array_info(data->prog, name);
+	if (!data->kernel)
+		return index;
+
 	i = find_array_index(data->kernel, name);
 	if (i < 0)
 		isl_die(isl_multi_pw_aff_get_ctx(index), isl_error_internal,
 			"cannot find array",
 			return isl_multi_pw_aff_free(index));
 	data->local_array = &data->kernel->array[i];
+	assert((data->array == data->local_array->array) && "different arrays found by different methods");
 	data->array = data->local_array->array;
 
 	group = find_ref_group(data->local_array, access);
@@ -1744,6 +1761,71 @@ __isl_give isl_ast_expr *gpu_local_array_info_linearize_index(
 	return res;
 }
 
+static __isl_give isl_ast_expr *gpu_array_info_linearize_index(
+	struct gpu_array_info *array, __isl_take isl_ast_expr *expr)
+{
+	int i, n;
+	isl_ctx *ctx;
+	isl_set *context;
+	isl_ast_expr *arg0;
+	isl_ast_expr *res;
+	isl_ast_expr_list *list;
+	isl_ast_build *build;
+
+	arg0 = isl_ast_expr_get_op_arg(expr, 0);
+	if (isl_ast_expr_get_type(arg0) == isl_ast_expr_op &&
+	    isl_ast_expr_get_op_type(arg0) == isl_ast_op_member) {
+		isl_ast_expr *arg;
+
+		arg = isl_ast_expr_get_op_arg(arg0, 0);
+		arg = gpu_array_info_linearize_index(array, arg);
+		arg0 = isl_ast_expr_set_op_arg(arg0, 0, arg);
+		expr = isl_ast_expr_set_op_arg(expr, 0, arg0);
+
+		return expr;
+	}
+	isl_ast_expr_free(arg0);
+
+	if (isl_ast_expr_get_op_n_arg(expr) == 1)
+		return expr;
+
+	ctx = isl_ast_expr_get_ctx(expr);
+	context = isl_set_universe(isl_space_params_alloc(ctx, 0));
+	build = isl_ast_build_from_context(context);
+
+	n = isl_ast_expr_get_op_n_arg(expr);
+	res = isl_ast_expr_get_op_arg(expr, 1);
+	for (i = 1; i < array->n_index; ++i) {
+		isl_pw_aff *bound_i;
+		isl_ast_expr *expr_i;
+
+		bound_i = array->bound[i];
+		expr_i = isl_ast_build_expr_from_pw_aff(build, bound_i);
+		res = isl_ast_expr_mul(res, expr_i);
+
+		if (i + 1 >= n)
+			continue;
+		expr_i = isl_ast_expr_get_op_arg(expr, i + 1);
+		res = isl_ast_expr_add(res, expr_i);
+	}
+
+	isl_ast_build_free(build);
+
+	if (1 + array->n_index > n) {
+		res = isl_ast_expr_add(isl_ast_expr_get_op_arg(expr, 0), res);
+	} else {
+		list = isl_ast_expr_list_from_ast_expr(res);
+		res = isl_ast_expr_get_op_arg(expr, 0);
+		res = isl_ast_expr_access(res, list);
+	}
+
+	isl_ast_expr_free(expr);
+
+	return res;
+}
+
+
+
 /* AST expression transformation callback for pet_stmt_build_ast_exprs.
  *
  * If the AST expression refers to an array that is not accessed
@@ -1780,7 +1862,9 @@ static __isl_give isl_ast_expr *transform_expr(__isl_take isl_ast_expr *expr,
 	if (!data->array->linearize)
 		return expr;
 
-	return gpu_local_array_info_linearize_index(data->local_array, expr);
+	if (data->local_array)
+		return gpu_local_array_info_linearize_index(data->local_array, expr);
+	return gpu_array_info_linearize_index(data->array, expr);
 }
 
 /* This function is called for each instance of a user statement
@@ -1797,7 +1881,7 @@ static __isl_give isl_ast_expr *transform_expr(__isl_take isl_ast_expr *expr,
  * the kernel schedule computed by PPCG in terms of the generated loops.
  */
 static __isl_give isl_ast_node *create_domain_leaf(
-	struct ppcg_kernel *kernel, __isl_take isl_ast_node *node,
+	struct ppcg_kernel *kernel, struct gpu_prog *prog,  __isl_take isl_ast_node *node,
 	__isl_keep isl_ast_build *build, struct gpu_stmt *gpu_stmt)
 {
 	struct ppcg_transform_data data;
@@ -1829,6 +1913,7 @@ static __isl_give isl_ast_node *create_domain_leaf(
 	stmt->type = ppcg_kernel_domain;
 	stmt->u.d.stmt = gpu_stmt;
 
+	data.prog = prog;
 	data.kernel = kernel;
 	data.accesses = stmt->u.d.stmt->accesses;
 	data.iterator_map = iterator_map;
@@ -1996,7 +2081,7 @@ static __isl_give isl_ast_node *at_domain(__isl_take isl_ast_node *node,
 	isl_id_free(id);
 
 	if (gpu_stmt)
-		return create_domain_leaf(data->kernel, node, build, gpu_stmt);
+		return create_domain_leaf(data->kernel, data->prog, node, build, gpu_stmt);
 
 	if (!prefixcmp(name, "to_device_") || !prefixcmp(name, "from_device_"))
 		return node;
@@ -5441,3 +5526,28 @@ void *gpu_prog_free(struct gpu_prog *prog)
 	free(prog);
 	return NULL;
 }
+
+#if 0
+static __isl_give isl_ast_expr *gpu_transform_host_expr(__isl_take isl_ast_expr *expr, __isl_keep isl_id *id, void *user) {
+	struct gpu_array_info *array = user;
+
+	if (array)
+		return expr;
+	if (!array->accessed) {
+		isl_ctx *ctx;
+
+		ctx = isl_ast_expr_get_ctx(expr);
+		isl_ast_expr_free(expr);
+		return isl_ast_expr_from_val(isl_val_zero(ctx));
+	}
+	if (gpu_array_is_read_only_scalar(array))
+		return expr;
+	if (array->n_index == 0)
+		return dereference(expr);
+
+	struct gpu_local_array_info local_array = {array};
+	local_array.n_index = array->n_index;
+	local_array.bound = array->bound;
+	return gpu_local_array_info_linearize_index(&local_array, expr);
+}
+#endif

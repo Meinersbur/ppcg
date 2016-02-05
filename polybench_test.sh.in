@@ -62,7 +62,6 @@ run_tests () {
 		name=`basename $i`
 		name=${name%.c}
 		source_opt="${OUTDIR}/$name.$ext.c"
-		kernel_opt="${OUTDIR}/$name.${ext}_kernel.c"
 		prog_orig=${OUTDIR}/$name.orig${EXEEXT}
 		prog_opt=${OUTDIR}/$name.$ext${EXEEXT}
 		output_orig=${OUTDIR}/$name.orig.out
@@ -74,6 +73,12 @@ run_tests () {
 		fi
 		${bindir}/ppcg$EXEEXT -I $DIR/$dir $DIR/$i $CPPFLAGS \
 			-o $source_opt $ppcg_options || exit
+
+		kernel_opt="${OUTDIR}/$name.${ext}_kernel.c"
+		if [ ! -f "$kernel_opt" ]; then
+			kernel_opt=
+		fi
+
 		$CC -I $DIR/$dir $CPPFLAGS $DIR/$i -o $prog_orig \
 			$DIR/utilities/polybench.c $CFLAGS
 		$prog_orig 2> $output_orig

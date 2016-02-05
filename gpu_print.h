@@ -22,7 +22,7 @@ __isl_give isl_printer *ppcg_kernel_print_copy(__isl_take isl_printer *p,
 __isl_give isl_printer *ppcg_kernel_print_domain(__isl_take isl_printer *p,
 	struct ppcg_kernel_stmt *stmt);
 
-__isl_give isl_printer *gpu_print_prog_declaration(__isl_take isl_printer *p, struct gpu_prog *prog);
+__isl_give isl_printer *gpu_print_prog_declaration(__isl_take isl_printer *p, struct gpu_prog *prog, isl_bool has_custom_types);
 __isl_give isl_printer *gpu_print_prog_invocation(__isl_take isl_printer *p, struct gpu_prog *prog);
 
 #endif

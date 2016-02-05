@@ -106,9 +106,9 @@ ISL_ARG_BOOL(struct ppcg_options, openmp, 0, "openmp", 0,
 ISL_ARG_USER_OPT_CHOICE(struct ppcg_options, target, 0, "target", target,
 	&set_target, PPCG_TARGET_CUDA, PPCG_TARGET_CUDA,
 	"the target to generate code for")
-ISL_ARG_BOOL(struct ppcg_options, linearize_device_arrays, 0,
-	"linearize-device-arrays", 1,
-	"linearize all device arrays, even those of fixed size")
+//ISL_ARG_BOOL(struct ppcg_options, linearize_device_arrays, 0,
+//	"linearize-device-arrays", 1,
+//	"linearize all device arrays, even those of fixed size")
 ISL_ARG_BOOL(struct ppcg_options, live_range_reordering, 0,
 	"live-range-reordering", 1,
 	"allow successive live ranges on the same memory element "

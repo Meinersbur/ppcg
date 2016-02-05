@@ -48,6 +48,9 @@ struct opencl_info {
 	FILE *kernel_h;
 	FILE *kernel_c;
 	FILE *kernel_cl;
+
+	/* The sequence of types for which a definition has been printed into kernel_c */
+	struct gpu_types types_c;
 };
 
 /* Open the file called "name" for writing or print an error message.
@@ -106,13 +109,13 @@ static int opencl_open_files(struct opencl_info *info)
 	if (!info->host_c || !info->kernel_h || !info->kernel_c || !info->kernel_cl)
 		return -1;
 
-
+	fprintf(info->host_c, "#include \"%s\"\n", info->kernel_h_name);   // TODO: Absolute path
+	//fprintf(info->kernel_c, "#include \"%s\"\n", info->kernel_h_name); // TODO: Absolute path
 	if (info->options->target == PPCG_TARGET_OPENCL) {
-		fprintf(info->host_c, "#include <assert.h>\n");
-		fprintf(info->host_c, "#include <stdio.h>\n");
-		fprintf(info->host_c, "#include \"ocl_utilities.h\"\n");
+		fprintf(info->kernel_c, "#include <assert.h>\n");
+		fprintf(info->kernel_c, "#include <stdio.h>\n");
+		fprintf(info->kernel_c, "#include \"ocl_utilities.h\"\n");
 	} else {
-		fprintf(info->host_c, "#include \"%s\"\n", info->kernel_h_name); // TODO: Absolute path
 		fputs("#include <prl_scop.h>\n", info->kernel_c);
 	}
 
@@ -343,6 +346,8 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 		if (need_lower_bound)
 			p = isl_printer_print_str(p, ")");
 		p = isl_printer_print_str(p, ", \"");
+		if (gpu_array_is_read_only_scalar(array))
+			p = isl_printer_print_str(p, ", &");
 		p = isl_printer_print_str(p, array->name);
 		p = isl_printer_print_str(p, "\");");
 		p = isl_printer_end_line(p);
@@ -992,7 +997,7 @@ static __isl_give isl_printer *copy_array(__isl_take isl_printer *p,
 	p = isl_printer_print_str(p, ", CL_TRUE, 0, ");
 	p = gpu_array_info_print_size(p, array);
 
-	if (gpu_array_is_scalar(array))
+	if (gpu_array_is_read_only_scalar(array))
 		p = isl_printer_print_str(p, ", &");
 	else
 		p = isl_printer_print_str(p, ", ");
@@ -1113,8 +1118,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 			p = ppcg_kernel_print_domain(p, stmt);
 			p = isl_printer_print_str(p, "} else {");
 
-			isl_printer *kp = data->opencl->kprinter;
-			kp = print_opencl_kernel_domain(kp, stmt);
+			data->opencl->kprinter = print_opencl_kernel_domain(data->opencl->kprinter, stmt);
 			//data->opencl->kprinter = opencl_print_kernel(data->prog, , data->opencl->kprinter);
 			p = isl_printer_print_str(p, "}}");
 			return p;
@@ -1479,7 +1483,7 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	header = isl_printer_set_output_format(header, ISL_FORMAT_C);
 
 	header = isl_printer_start_line(header);
-	header = gpu_print_prog_declaration(header, prog);
+	header = gpu_print_prog_declaration(header, prog, /*has_custom_types=*/isl_bool_false);
 	header = isl_printer_print_str(header, ";");
 	header = isl_printer_end_line(header);
 
@@ -1490,8 +1494,11 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	code = isl_printer_set_output_format(code, ISL_FORMAT_C);
 
 	code = isl_printer_print_str(code, "\n");
+	code = gpu_print_types(code, &opencl->types_c,	prog);
+
+	code = isl_printer_print_str(code, "\n");
 	code = isl_printer_start_line(code);
-	code = gpu_print_prog_declaration(code, prog);
+	code = gpu_print_prog_declaration(code, prog, /*has_custom_types=*/isl_bool_true);
 	code = isl_printer_end_line(code);
 
 	code = ppcg_start_block(code);
@@ -1534,6 +1541,10 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 	if (opencl_close_files(&opencl) < 0)
 		r = -1;
 	isl_printer_free(opencl.kprinter);
+
+	for (int i = 0; i < opencl.types_c.n; ++i)
+		free(opencl.types_c.name[i]);
+	free(opencl.types_c.name);
 
 	return r;
 }

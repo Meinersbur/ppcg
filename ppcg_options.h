@@ -46,7 +46,7 @@ struct ppcg_options {
 	int openmp;
 
 	/* Linearize all device arrays. */
-	int linearize_device_arrays;
+	//int linearize_device_arrays;
 
 	/* Allow live range to be reordered. */
 	int live_range_reordering;
