@@ -47,10 +47,7 @@ void cuda_open_files(struct cuda_info *info, const char *input, const char *outp
 	fprintf(info->host_c, "\n");
 	fprintf(info->host_c, "#include \"%s\"\n\n", name);
 
-    //fprintf(info->kernel_cu, "#include \"%s\"\n\n", name);
-	fprintf(info->kernel_cu, "#include <cuda.h>\n");
-    fprintf(info->kernel_cu, "#include <assert.h>\n");
-    fprintf(info->kernel_cu, "#include <stdio.h>\n");
+	fprintf(info->kernel_cu, "#include <pencil_cuda.h>\n");
 
 	//TODO: Header guard
     fprintf(info->kernel_h, "#ifdef __cplusplus\n");
