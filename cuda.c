@@ -684,7 +684,6 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 
 	// Print function declaration into _kernel.h
 	header = isl_printer_start_line(header);
-	header = isl_printer_print_str(header, "extern \"C\" ");
 	header = gpu_print_prog_declaration(header, prog, /*has_custom_types=*/isl_bool_false);
 	header = isl_printer_print_str(header, ";");
 	header = isl_printer_end_line(header);
@@ -703,6 +702,7 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	// Print generated code into _kernel.cu
 	code = isl_printer_print_str(code, "\n");
 	code = isl_printer_start_line(code);
+	code = isl_printer_print_str(code, "extern \"C\" ");
 	code = gpu_print_prog_declaration(code, prog, /*has_custom_types=*/isl_bool_true);
 	code = isl_printer_end_line(code);
 
