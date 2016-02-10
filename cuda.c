@@ -299,7 +299,14 @@ static __isl_give isl_printer *print_kernel_header(__isl_take isl_printer *p,
 	struct gpu_prog *prog, struct ppcg_kernel *kernel)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "__global__ void __ppcg_kernel");
+	p = isl_printer_print_str(p, "__global__ void ");
+	const char *funcname = pet_scop_get_function_name(prog->scop->pet);
+	if (funcname) {
+		p = isl_printer_print_str(p, "__ppcg_");
+		p = isl_printer_print_str(p, funcname);
+		p = isl_printer_print_str(p, "_kernel");
+	} else
+		p = isl_printer_print_str(p, "__ppcg_kernel");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, "(");
 	p = print_kernel_arguments(p, prog, kernel, 1);
@@ -571,7 +578,13 @@ static __isl_give isl_printer *print_host_user(__isl_take isl_printer *p,
 	p = print_grid(p, kernel);
 
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "__ppcg_kernel");
+	const char *funcname = pet_scop_get_function_name(data->prog->scop->pet);
+	if (funcname) {
+		p = isl_printer_print_str(p, "__ppcg_");
+		p = isl_printer_print_str(p, funcname);
+		p = isl_printer_print_str(p, "_kernel");
+	} else
+		p = isl_printer_print_str(p, "__ppcg_kernel");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, " <<<k");
 	p = isl_printer_print_int(p, kernel->id);
