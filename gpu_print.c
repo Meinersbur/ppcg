@@ -256,13 +256,18 @@ __isl_give isl_printer *gpu_print_types(__isl_take isl_printer *p,
 	return p;
 }
 
-
 static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct gpu_prog *prog) {
-	p = isl_printer_print_str(p, "__ppcg_prog");
+	const char *funcname = pet_scop_get_function_name(prog->scop->pet);
+	if (funcname) {
+		p = isl_printer_print_str(p, "__ppcg_");
+		p = isl_printer_print_str(p, funcname);
+		p = isl_printer_print_str(p, "_prog");
+	} else
+		p = isl_printer_print_str(p, "__ppcg_prog");
 	p = isl_printer_print_int(p, prog->id);
 	return p;
 }
-//#include <pet.h>
+
 static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struct gpu_prog *prog,  __isl_give isl_printer *(*callback)(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, isl_id *param, struct gpu_array_info *array,  void *user), void *user) {
 	bool firstarg = true;
 
