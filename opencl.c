@@ -244,6 +244,7 @@ static __isl_give isl_printer *opencl_print_host_macros(
 	p = isl_printer_end_line(p);
 	}
 
+	p = ppcg_set_macro_names(p);
 	p = isl_ast_op_type_print_macro(isl_ast_op_max, p);
 
 	return p;
@@ -308,7 +309,8 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 
 	need_lower_bound = !is_array_positive_size_guard_trivial(array);
 	if (need_lower_bound) {
-		p = isl_printer_print_str(p, "max(sizeof(");
+                p = isl_printer_print_str(p, ppcg_max);
+		p = isl_printer_print_str(p, "(sizeof(");
 		p = isl_printer_print_str(p, array->type);
 		p = isl_printer_print_str(p, "), ");
 	}
@@ -338,7 +340,8 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 		}
 		p = isl_printer_print_str(p, ", ");
 		if (need_lower_bound) {
-			p = isl_printer_print_str(p, "max(sizeof(");
+                        p = isl_printer_print_str(p, ppcg_max);
+                        p = isl_printer_print_str(p, "(sizeof(");
 			p = isl_printer_print_str(p, array->type);
 			p = isl_printer_print_str(p, "), ");
 		}
@@ -874,6 +877,7 @@ static __isl_give isl_printer *opencl_print_kernel(struct gpu_prog *prog,
 	p = opencl_print_kernel_iterators(p, kernel);
 	p = opencl_print_kernel_vars(p, kernel);
 	p = isl_printer_end_line(p);
+	p = ppcg_set_macro_names(p);
 	p = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, p);
 	p = ppcg_print_macros(p, kernel->tree);
 	p = isl_ast_node_print(kernel->tree, p, print_options);
@@ -1492,6 +1496,7 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 
 	isl_printer *code = isl_printer_to_file(isl_printer_get_ctx(p), opencl->kernel_c);
 	code = isl_printer_set_output_format(code, ISL_FORMAT_C);
+	code = ppcg_set_macro_names(code);
 
 	code = isl_printer_print_str(code, "\n");
 	code = gpu_print_types(code, &opencl->types_c,	prog);
