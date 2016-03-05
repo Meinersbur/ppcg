@@ -158,7 +158,7 @@ static __isl_give isl_printer* print_reverse_list(__isl_take isl_printer *p, int
 {
 	int i;
 
-	if (len == 0)
+        if (!p || len == 0)
 		return p;
 
 	p = isl_printer_print_str(p,"(");
