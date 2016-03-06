@@ -298,6 +298,7 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 	if (need_lower_bound)
 		p = isl_ast_op_type_print_macro(isl_ast_op_max, p);
 
+	p = isl_ast_expr_print_macros(array->bound_expr, p);
 	if (opencl->options->target == PPCG_TARGET_OPENCL) {
 	p = ppcg_start_block(p);
 
@@ -1459,7 +1460,7 @@ static __isl_give isl_printer *opencl_print_host_code(
 	print_options = isl_ast_print_options_set_print_user(print_options,
 				&opencl_print_host_user, &data);
 
-	p = ppcg_print_macros(p, tree);
+	p = gpu_print_macros(p, tree);
 	p = isl_ast_node_print(tree, p, print_options);
 
 	return p;

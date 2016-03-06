@@ -5437,8 +5437,7 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	} else {
 		schedule = map_to_device(gen, schedule);
 		gen->tree = generate_code(gen, schedule);
-		//p = ppcg_set_macro_names(p);
-		//p = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, p);
+		p = ppcg_set_macro_names(p);
 		p = ppcg_print_exposed_declarations(p, prog->scop);
 		p = gen->print(p, gen->prog, gen->tree, &gen->types,
 				    gen->print_user);
