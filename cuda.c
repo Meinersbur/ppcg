@@ -502,15 +502,46 @@ static void print_kernel(struct gpu_prog *prog, struct ppcg_kernel *kernel,
 	fprintf(cuda->kernel_cu, "}\n");
 }
 
-/* Print a statement for copying an array to or from the device.
- * The statement identifier is called "to_device_<array name>" or
- * "from_device_<array name>" and its user pointer points
- * to the gpu_array_info of the array that needs to be copied.
- *
- * Extract the array from the identifier and call
- * copy_array_to_device or copy_array_from_device.
+/* Print code for initializing the device for execution of the transformed
+ * code.  This includes declaring locally defined variables as well as
+ * declaring and allocating the required copies of arrays on the device.
  */
-static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
+static __isl_give isl_printer *init_device(__isl_take isl_printer *p,
+	struct gpu_prog *prog)
+{
+	p = print_cuda_macros(p);
+
+	p = gpu_print_local_declarations(p, prog);
+	p = declare_device_arrays(p, prog);
+	p = allocate_device_arrays(p, prog);
+
+	return p;
+}
+
+/* Print code for clearing the device after execution of the transformed code.
+ * In particular, free the memory that was allocated on the device.
+ */
+static __isl_give isl_printer *clear_device(__isl_take isl_printer *p,
+	struct gpu_prog *prog)
+{
+	p = free_device_arrays(p, prog);
+
+	return p;
+}
+
+/* Print a statement for copying an array to or from the device,
+ * or for initializing or clearing the device.
+ * The statement identifier of a copying node is called
+ * "to_device_<array name>" or "from_device_<array name>" and
+ * its user pointer points to the gpu_array_info of the array
+ * that needs to be copied.
+ * The node for initializing the device is called "init_device".
+ * The node for clearing the device is called "clear_device".
+ *
+ * Extract the array (if any) from the identifier and call
+ * init_device, clear_device, copy_array_to_device or copy_array_from_device.
+ */
+static __isl_give isl_printer *print_device_node(__isl_take isl_printer *p,
 	__isl_keep isl_ast_node *node, struct gpu_prog *prog)
 {
 	isl_ast_expr *expr, *arg;
@@ -528,7 +559,11 @@ static __isl_give isl_printer *print_to_from_device(__isl_take isl_printer *p,
 	isl_ast_expr_free(expr);
 
 	if (!name)
-		array = NULL;
+		return isl_printer_free(p);
+	if (!strcmp(name, "init_device"))
+		return init_device(p, prog);
+	if (!strcmp(name, "clear_device"))
+		return clear_device(p, prog);
 	if (!array)
 		return isl_printer_free(p);
 
@@ -545,11 +580,12 @@ struct print_host_user_data {
 
 /* Print the user statement of the host code to "p".
  *
- * The host code may contain original user statements, kernel launches and
- * statements that copy data to/from the device.
+ * The host code may contain original user statements, kernel launches,
+ * statements that copy data to/from the device and statements
+ * the initialize or clear the device.
  * The original user statements and the kernel launches have
- * an associated annotation, while the data copy statements do not.
- * The latter are handled by print_to_from_device.
+ * an associated annotation, while the other statements do not.
+ * The latter are handled by print_device_node.
  * The annotation on the user statements is called "user".
  *
  * In case of a kernel launch, print a block of statements that
@@ -571,7 +607,7 @@ static __isl_give isl_printer *print_host_user(__isl_take isl_printer *p,
 
 	id = isl_ast_node_get_annotation(node);
 	if (!id)
-		return print_to_from_device(p, node, data->prog);
+		return print_device_node(p, node, data->prog);
 
 	is_user = !strcmp(isl_id_get_name(id), "user");
 	kernel = is_user ? NULL : isl_id_get_user(id);
@@ -659,15 +695,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
 	struct gpu_prog *prog = tuser->prog;
 	isl_ast_node *tree = tuser->tree;
 
-	p = ppcg_start_block(p);
-	p = ppcg_print_macros(p, tree);
-	p = print_cuda_macros(p);//TODO: Get rid of macros
-	p = gpu_print_local_declarations(p, prog);
-	p = declare_device_arrays(p, prog);
-	p = allocate_device_arrays(p, prog);
 	p = print_host_code(p, prog, tree, cuda);
-	p = free_device_arrays(p, prog);
-	p = ppcg_end_block(p);
 
 	return p;
 }
@@ -692,7 +720,6 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	if (!kernel)
 		return isl_printer_free(p);
 
-
 	header = isl_printer_to_file(isl_printer_get_ctx(p), cuda->kernel_h);
 	header = isl_printer_set_output_format(header, ISL_FORMAT_C);
 
@@ -703,7 +730,6 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	header = isl_printer_end_line(header);
 
 	isl_printer_free(header);
-
 
 	// Print function call into _host.c
 	p = gpu_print_prog_invocation(p, prog);
