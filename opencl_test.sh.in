@@ -68,6 +68,7 @@ for i in $srcdir/examples/*.c; do
 	name="${name%.c}"
 	exe_ref="${OUTDIR}/$name.ref$EXEEXT"
 	gen_ocl="${OUTDIR}/$name.ppcg.c"
+	gen_kernel_ocl="${OUTDIR}/$name.ppcg_kernel.c"
 	exe_ocl="${OUTDIR}/$name.ppcg$EXEEXT"
 	output_ref="${OUTDIR}/$name.ref.out"
 	output_ocl="${OUTDIR}/$name.ppcg.out"
@@ -75,7 +76,7 @@ for i in $srcdir/examples/*.c; do
 	./ppcg$EXEEXT --target=opencl --opencl-no-use-gpu $i -o "$gen_ocl" || \
 		exit
 	$CC $CFLAGS -I "$srcdir" "$srcdir/ocl_utilities.c" -lOpenCL \
-		"$gen_ocl" -o "$exe_ocl" || exit
+		"$gen_ocl" -I. "$gen_kernel_ocl" -o "$exe_ocl" || exit
 	$exe_ref > $output_ref || exit
 	$exe_ocl > $output_ocl || exit
 	cmp $output_ref $output_ocl || exit
