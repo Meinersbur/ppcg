@@ -186,7 +186,7 @@ struct gpu_gen {
 	/* Callback for printing of AST in appropriate format. */
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
 		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-		struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user);
+		struct gpu_types *types, void *user);
 	void *print_user;
 
 	struct gpu_prog *prog;
@@ -394,6 +394,6 @@ int generate_gpu(isl_ctx *ctx, const char *input, FILE *out,
 	struct ppcg_options *options,
 	__isl_give isl_printer *(*print)(__isl_take isl_printer *p,
 		struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-		struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user), void *user);
+		struct gpu_types *types, void *user), void *user);
 
 #endif

@@ -1492,7 +1492,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
  */
 static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 	struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-	struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user)
+	struct gpu_types *types, void *user)
 {
 	struct opencl_info *opencl = user;
 
@@ -1538,8 +1538,7 @@ static __isl_give isl_printer *print_opencl(__isl_take isl_printer *p,
 
 	code = ppcg_start_block(code);
 	code = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, code);
-	struct print_code_user tuser = {opencl,prog,tree};
-	code = ppcg_print_guarded(code, guard, context, &print_code, &tuser);
+	code = opencl_print_host_code(code, prog, tree, opencl);
 	code = ppcg_end_block(code);
 
 	isl_printer_free(code);

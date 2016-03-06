@@ -678,24 +678,9 @@ static __isl_give isl_printer *print_host_code(__isl_take isl_printer *p,
 	print_options = isl_ast_print_options_alloc(ctx);
 	print_options = isl_ast_print_options_set_print_user(print_options,
 						&print_host_user, &data);
+
+	// p = ppcg_print_macros(p, tree);
 	p = isl_ast_node_print(tree, p, print_options);
-
-	return p;
-}
-
-struct print_code_user {
-	struct cuda_info *cuda;
-	struct gpu_prog *prog;
-	 isl_ast_node *tree;
-};
-
-static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user) {
-	struct print_code_user *tuser = user;
-	struct cuda_info *cuda = tuser->cuda;
-	struct gpu_prog *prog = tuser->prog;
-	isl_ast_node *tree = tuser->tree;
-
-	p = print_host_code(p, prog, tree, cuda);
 
 	return p;
 }
@@ -707,7 +692,7 @@ static __isl_give isl_printer *print_code(__isl_take isl_printer *p, void *user)
  */
 static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	struct gpu_prog *prog, __isl_keep isl_ast_node *tree,
-	struct gpu_types *types, __isl_take isl_set *guard, __isl_take isl_set *context, void *user)
+	struct gpu_types *types, void *user)
 {
 	struct cuda_info *cuda = user;
 	isl_printer *kernel, *header;
@@ -749,8 +734,7 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 
 	code = ppcg_start_block(code);
 	code = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, code);
-	struct print_code_user tuser = {cuda,prog,tree};
-	code = ppcg_print_guarded(code, guard, context, &print_code, &tuser);
+	code = print_host_code(code, prog, tree, cuda);
 	code = ppcg_end_block(code);
 
 	char *codestr = isl_printer_get_str(code);
