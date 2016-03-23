@@ -679,7 +679,7 @@ static __isl_give isl_printer *print_host_code(__isl_take isl_printer *p,
 	print_options = isl_ast_print_options_set_print_user(print_options,
 						&print_host_user, &data);
 
-	// p = gpu_print_macros(p, tree);
+	p = gpu_print_macros(p, tree);
 	p = isl_ast_node_print(tree, p, print_options);
 
 	return p;
