@@ -334,7 +334,7 @@ static __isl_give isl_printer *allocate_device_array(__isl_take isl_printer *p,
 		if (device_only) {
 			p = isl_printer_print_str(p, "NULL");
 		} else {
-			if (gpu_array_is_scalar(array))
+			if (gpu_array_is_read_only_scalar(array))
 				p = isl_printer_print_str(p, "&");
 			p = isl_printer_print_str(p, array->name);
 		}
