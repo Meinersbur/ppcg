@@ -47,7 +47,6 @@ struct ppcg_stmt {
 static void ppcg_stmt_free(void *user)
 {
 	struct ppcg_stmt *stmt = user;
-	int i;
 
 	if (!stmt)
 		return;
@@ -126,7 +125,7 @@ struct ast_build_userinfo {
 static int ast_schedule_dim_is_parallel(__isl_keep isl_ast_build *build,
 	struct ppcg_scop *scop)
 {
-	isl_union_map *schedule_node, *schedule, *deps;
+	isl_union_map *schedule, *deps;
 	isl_map *schedule_deps, *test;
 	isl_space *schedule_space;
 	unsigned i, dimension, is_parallel;
@@ -337,7 +336,6 @@ static __isl_give isl_printer *print_for(__isl_take isl_printer *p,
 	__isl_take isl_ast_print_options *print_options,
 	__isl_keep isl_ast_node *node, void *user)
 {
-	struct ppcg_print_info *print_info;
 	isl_id *id;
 	int openmp;
 
@@ -565,7 +563,7 @@ static __isl_give isl_schedule_node *tile_band(
 	__isl_take isl_schedule_node *node, void *user)
 {
 	struct ppcg_scop *scop = user;
-	int i, n;
+	int n;
 	isl_space *space;
 	isl_multi_val *sizes;
 
@@ -651,7 +649,8 @@ static __isl_give isl_schedule_constraints *construct_cpu_schedule_constraints(
 /* Compute a schedule for the scop "ps".
  *
  * First derive the appropriate schedule constraints from the dependences
- * in "ps" and then compute a schedule from those schedule constraints.
+ * in "ps" and then compute a schedule from those schedule constraints,
+ * possibly grouping statement instances based on the input schedule.
  */
 static __isl_give isl_schedule *compute_cpu_schedule(struct ppcg_scop *ps)
 {
@@ -665,7 +664,7 @@ static __isl_give isl_schedule *compute_cpu_schedule(struct ppcg_scop *ps)
 
 	if (ps->options->debug->dump_schedule_constraints)
 		isl_schedule_constraints_dump(sc);
-	schedule = isl_schedule_constraints_compute_schedule(sc);
+	schedule = ppcg_compute_schedule(sc, ps->schedule, ps->options);
 
 	return schedule;
 }

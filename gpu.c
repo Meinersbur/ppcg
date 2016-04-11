@@ -1,6 +1,7 @@
 /*
  * Copyright 2010-2011 INRIA Saclay
  * Copyright 2012-2013 Ecole Normale Superieure
+ * Copyright 2016      Sven Verdoolaege
  *
  * Use of this software is governed by the MIT license
  *
@@ -156,6 +157,20 @@ static int is_read_only_scalar(struct gpu_array_info *array,
 	return empty;
 }
 
+/* Is "array" only accessed as individual, fixed elements?
+ * That is, does each access to "array" access a single, fixed element?
+ */
+static isl_bool only_fixed_element_accessed(struct gpu_array_info *array)
+{
+	int i;
+
+	for (i = 0; i < array->n_ref; ++i)
+		if (!array->refs[i]->fixed_element)
+			return isl_bool_false;
+
+	return isl_bool_true;
+}
+
 /* Compute bounds on the host array "pa" based on the corresponding
  * accessed elements in "arrays"
  * and collect all references to the array.
@@ -189,6 +204,7 @@ static int extract_array_info(struct gpu_prog *prog,
 	info->has_compound_element = pa->element_is_record;
 	info->read_only_scalar = is_read_only_scalar(info, prog);
 
+	info->declared_extent = isl_set_copy(pa->extent);
 	accessed = isl_union_set_extract_set(arrays,
 					    isl_space_copy(info->space));
 	empty = isl_set_is_empty(accessed);
@@ -207,6 +223,7 @@ static int extract_array_info(struct gpu_prog *prog,
 	info->bound = bounds;
 
 	collect_references(prog, info);
+	info->only_fixed_element = only_fixed_element_accessed(info);
 
 	return 0;
 }
@@ -253,7 +270,7 @@ static __isl_give isl_union_map *remove_independences(struct gpu_prog *prog,
  * the same array, the target of these order dependences will also
  * be one of these references.)
  * Additionally, store the union of these array->dep_order relations
- * for all non-scalar arrays in prog->array_order.
+ * for all arrays that cannot be mapped to private memory in prog->array_order.
  */
 void collect_order_dependences(struct gpu_prog *prog)
 {
@@ -289,7 +306,7 @@ void collect_order_dependences(struct gpu_prog *prog)
 		order = remove_independences(prog, array, order);
 		array->dep_order = order;
 
-		if (gpu_array_is_scalar(array) && !array->has_compound_element)
+		if (gpu_array_can_be_private(array))
 			continue;
 
 		prog->array_order = isl_union_map_union(prog->array_order,
@@ -306,6 +323,7 @@ void collect_order_dependences(struct gpu_prog *prog)
  * elements by "prog".
  * If there are any member accesses involved, then they are first mapped
  * to the outer arrays of structs.
+ * Only extract gpu_array_info entries for these outer arrays.
  *
  * If we are allowing live range reordering, then also set
  * the dep_order field.  Otherwise leave it NULL.
@@ -329,10 +347,21 @@ static int collect_array_info(struct gpu_prog *prog)
 	prog->array = isl_calloc_array(prog->ctx,
 				     struct gpu_array_info, prog->n_array);
 	assert(prog->array);
-	for (i = 0; i < prog->scop->pet->n_array; ++i)
-		if (extract_array_info(prog, &prog->array[i],
+	prog->n_array = 0;
+	for (i = 0; i < prog->scop->pet->n_array; ++i) {
+		isl_bool field;
+
+		field = isl_set_is_wrapping(prog->scop->pet->arrays[i]->extent);
+		if (field < 0)
+			break;
+		if (field)
+			continue;
+		if (extract_array_info(prog, &prog->array[prog->n_array++],
 					prog->scop->pet->arrays[i], arrays) < 0)
 			r = -1;
+	}
+	if (i < prog->scop->pet->n_array)
+		r = -1;
 
 	isl_union_set_free(arrays);
 
@@ -347,12 +376,12 @@ static void free_array_info(struct gpu_prog *prog)
 	int i;
 
 	for (i = 0; i < prog->n_array; ++i) {
-		int n_index = prog->array[i].n_index;
 		free(prog->array[i].type);
 		free(prog->array[i].name);
 		isl_multi_pw_aff_free(prog->array[i].bound);
 		isl_ast_expr_free(prog->array[i].bound_expr);
 		isl_space_free(prog->array[i].space);
+		isl_set_free(prog->array[i].declared_extent);
 		isl_set_free(prog->array[i].extent);
 		isl_ast_expr_free(prog->array[i].declared_size);
 		free(prog->array[i].refs);
@@ -369,6 +398,17 @@ static void free_array_info(struct gpu_prog *prog)
 int gpu_array_is_scalar(struct gpu_array_info *array)
 {
 	return array->n_index == 0;
+}
+
+/* Can "array" be mapped to private memory?
+ * That is, is it only accessed as individual elements with
+ * constant index expressions?
+ */
+isl_bool gpu_array_can_be_private(struct gpu_array_info *array)
+{
+	if (!array)
+		return isl_bool_error;
+	return array->only_fixed_element;
 }
 
 /* Is "array" a read-only scalar?
@@ -1056,7 +1096,7 @@ static void extract_fixed_size(__isl_take isl_set *set, int *size)
  * to the smallest block size that ensures that all threads
  * that actually execute code are included in the block.
  *
- * The possible values of the thread ids is obtained from
+ * The set of possible values of the thread ids is obtained from
  * the domain elements "domain" and kernel->thread_filter.
  * The current implementation eliminates all parameters, ensuring
  * that the size is a fixed constant in each dimension.
@@ -1118,6 +1158,8 @@ struct ppcg_kernel *ppcg_kernel_free(struct ppcg_kernel *kernel)
 	isl_set_free(kernel->context);
 	isl_union_set_free(kernel->core);
 	isl_union_set_free(kernel->arrays);
+	isl_union_pw_multi_aff_free(kernel->contraction);
+	isl_union_set_free(kernel->expanded_domain);
 	isl_space_free(kernel->space);
 	isl_ast_node_free(kernel->tree);
 	isl_union_set_free(kernel->block_filter);
@@ -1163,7 +1205,6 @@ static void create_kernel_var(isl_ctx *ctx, struct gpu_array_ref_group *group,
 	int j;
 	struct gpu_array_tile *tile;
 	isl_printer *p;
-	char *name;
 
 	var->array = group->array;
 
@@ -1345,7 +1386,6 @@ static struct gpu_stmt *find_stmt(struct gpu_prog *prog, __isl_keep isl_id *id)
 
 void ppcg_kernel_stmt_free(void *user)
 {
-	int i;
 	struct ppcg_kernel_stmt *stmt = user;
 
 	if (!stmt)
@@ -1456,6 +1496,66 @@ static struct gpu_array_ref_group *find_ref_group(
 	return NULL;
 }
 
+/* Given an index expression "index" of the form
+ *
+ *	L -> F(A),
+ *
+ * with F(A) either A or some subfield of A and L the AST loop iterators,
+ * and a tiling "tiling" of the form
+ *
+ *	[L -> A] -> T
+ *
+ * apply the tiling to the outer array in the index expression to obtain
+ *
+ *	L -> T(A)
+ *
+ * If F(A) is some subfield of A, then separate the member access
+ * into the base index expression and the field index expression,
+ * apply the tiling to the base index expression and combine the result
+ * with the field index expression.
+ *
+ * If F(A) is A, then modify index to keep track of the iterators
+ *
+ *	L -> [L -> A]
+ *
+ * and combine the result with the tiling to obtain a tiled index expression
+ * in terms of the AST loop iterators
+ *
+ *	L -> T
+ */
+static __isl_give isl_multi_pw_aff *tile_outer(
+	__isl_take isl_multi_pw_aff *index, __isl_take isl_multi_pw_aff *tiling)
+{
+	isl_bool is_wrapping;
+	isl_space *space;
+	isl_multi_pw_aff *mpa;
+
+	is_wrapping = isl_multi_pw_aff_range_is_wrapping(index);
+	if (is_wrapping < 0)
+		goto error;
+	if (is_wrapping) {
+		isl_multi_pw_aff *field;
+
+		field = isl_multi_pw_aff_copy(index);
+		field = isl_multi_pw_aff_range_factor_range(field);
+		index = isl_multi_pw_aff_range_factor_domain(index);
+		index = tile_outer(index, tiling);
+		return isl_multi_pw_aff_range_product(index, field);
+	}
+
+	space = isl_space_domain(isl_multi_pw_aff_get_space(index));
+	space = isl_space_map_from_set(space);
+	mpa = isl_multi_pw_aff_identity(space);
+	index = isl_multi_pw_aff_range_product(mpa, index);
+	index = isl_multi_pw_aff_pullback_multi_pw_aff(tiling, index);
+
+	return index;
+error:
+	isl_multi_pw_aff_free(index);
+	isl_multi_pw_aff_free(tiling);
+	return NULL;
+}
+
 /* Index transformation callback for pet_stmt_build_ast_exprs.
  *
  * "index" expresses the array indices in terms of statement iterators
@@ -1486,14 +1586,16 @@ static struct gpu_array_ref_group *find_ref_group(
  *
  *	[L -> A] -> T
  *
- * and modify index to keep track of those iterators
- *
- *	L -> [L -> A]
- *
- * Combining these two yields a tiled index expression in terms
+ * and combine it with the index to obtain a tiled index expression in terms
  * of the AST loop iterators
  *
  *	L -> T
+ *
+ * Note that while the tiling applies directly to an outer array.
+ * the index may refer to some subfield of this outer array.
+ * In such cases, the result will refer to the same subfield of the tile.
+ * That is, an index expression of the form  L -> F(A) will be transformed
+ * into an index expression of the form L -> F(T).
  */
 static __isl_give isl_multi_pw_aff *transform_index(
 	__isl_take isl_multi_pw_aff *index, __isl_keep isl_id *ref_id,
@@ -1552,7 +1654,8 @@ static __isl_give isl_multi_pw_aff *transform_index(
 	if (!tile)
 		return index;
 
-	space = isl_space_range(isl_multi_pw_aff_get_space(index));
+	space = isl_space_domain(isl_multi_aff_get_space(tile->tiling));
+	space = isl_space_range(isl_space_unwrap(space));
 	space = isl_space_map_from_set(space);
 	pma = isl_pw_multi_aff_identity(space);
 	sched2depth = isl_pw_multi_aff_copy(data->sched2copy);
@@ -1564,11 +1667,7 @@ static __isl_give isl_multi_pw_aff *transform_index(
 				    isl_multi_aff_copy(tile->tiling));
 	tiling = isl_multi_pw_aff_pullback_pw_multi_aff(tiling, pma);
 
-	space = isl_space_domain(isl_multi_pw_aff_get_space(index));
-	space = isl_space_map_from_set(space);
-	mpa = isl_multi_pw_aff_identity(space);
-	index = isl_multi_pw_aff_range_product(mpa, index);
-	index = isl_multi_pw_aff_pullback_multi_pw_aff(tiling, index);
+	index = tile_outer(index, tiling);
 
 	return index;
 }
@@ -1999,13 +2098,14 @@ static __isl_give isl_ast_node *build_array_bounds(
 
 	for (i = 0; i < prog->n_array; ++i) {
 		struct gpu_array_info *array = &prog->array[i];
-		struct pet_array *pet_array = prog->scop->pet->arrays[i];
+		isl_set *extent;
 		isl_multi_pw_aff *size;
 		isl_ast_expr *expr;
 
 		if (!array->declare_local)
 			continue;
-		size = ppcg_size_from_extent(isl_set_copy(pet_array->extent));
+		extent = isl_set_copy(array->declared_extent);
+		size = ppcg_size_from_extent(extent);
 		expr = ppcg_build_size_expr(size, build);
 		array->declared_size = expr;
 		if (!expr)
@@ -2132,6 +2232,8 @@ static __isl_give isl_union_map *wrapped_reference_to_access(
  * remove those reads if ("read" is 1) or writes (if "read" is 0)
  * that are only needed to communicate data within
  * the same iteration of "sched".
+ * The domain of "sched" corresponds to the original statement instances,
+ * i.e., those that appear in the domains of the access relations.
  * "tagged" contains all tagged access relations to all
  * the array reference groups accessed by "access" from statement
  * instances scheduled by "sched".
@@ -2272,17 +2374,19 @@ static __isl_give isl_union_map *remove_local_accesses(
 
 /* Given an access relation "access" from "group", remove those reads
  * if ("read" is 1) or writes (if "read" is 0) that are only needed to
- * communicate data within the same iteration of the schedule at the
- * position where the copying of the group is inserted.
- * "node" points to this position, i.e., the depth at "node"
+ * communicate data within the same iteration of the schedule "prefix"
+ * at the position where the copying of the group is inserted.
+ * That is, the output dimension of "prefix"
  * is equal to tile->depth.
+ * The domain of "prefix" corresponds to the original statement instances,
+ * i.e., those that appear in the domains of the access relations.
  *
- * We extract a schedule that picks out the iterations of the outer
- * tile->depth dimensions and call remove_local_accesses.
+ * Extract the tagged access relation of "group" and
+ * then call remove_local_accesses.
  */
 static __isl_give isl_union_map *remove_local_accesses_group(
 	struct ppcg_kernel *kernel, struct gpu_array_ref_group *group,
-	__isl_take isl_union_map *access, __isl_keep isl_schedule_node *node,
+	__isl_take isl_union_map *access, __isl_keep isl_union_map *prefix,
 	int read)
 {
 	isl_union_map *sched, *tagged;
@@ -2291,7 +2395,7 @@ static __isl_give isl_union_map *remove_local_accesses_group(
 		return access;
 
 	tagged = group_tagged_access_relation(group);
-	sched = isl_schedule_node_get_prefix_schedule_relation(node);
+	sched = isl_union_map_copy(prefix);
 
 	return remove_local_accesses(kernel->prog, tagged, access, sched, read);
 }
@@ -2844,7 +2948,9 @@ static __isl_give isl_set *extract_context(__isl_keep isl_schedule_node *node,
 }
 
 /* Return the set of outer array elements accessed by
- * by the statement instance in "domain" in "prog".
+ * by the statement instances in "domain" in "prog".
+ * The instances in "domain" are those that appear
+ * in the domains of the access relations in "prog".
  */
 static __isl_give isl_union_set *accessed_by_domain(
 	__isl_take isl_union_set *domain, struct gpu_prog *prog)
@@ -3177,9 +3283,12 @@ static __isl_give isl_union_map *anchored_non_local_accesses(
 	isl_union_map *access;
 	isl_union_map *prefix;
 
-	access = gpu_array_ref_group_access_relation(group, read, !read);
-	access = remove_local_accesses_group(kernel, group, access, node, read);
 	prefix = isl_schedule_node_get_prefix_schedule_relation(node);
+	prefix = isl_union_map_preimage_domain_union_pw_multi_aff(prefix,
+			    isl_union_pw_multi_aff_copy(kernel->contraction));
+	access = gpu_array_ref_group_access_relation(group, read, !read);
+	access = remove_local_accesses_group(kernel, group, access, prefix,
+						read);
 	access = isl_union_map_range_product(prefix, access);
 
 	return access;
@@ -3308,12 +3417,12 @@ static __isl_give isl_schedule_node *add_copies_group_private(
 {
 	struct gpu_array_tile *tile;
 	isl_union_map *access;
-	isl_union_map *prefix;
 	isl_union_set *domain;
 	isl_space *space;
 	isl_multi_aff *from_access;
 	isl_multi_pw_aff *mpa;
 	isl_multi_union_pw_aff *mupa;
+	isl_union_pw_multi_aff *contraction;
 	isl_schedule_node *graft;
 	isl_union_set *filter;
 	int kernel_depth;
@@ -3340,6 +3449,8 @@ static __isl_give isl_schedule_node *add_copies_group_private(
 	access = isl_union_map_preimage_range_multi_aff(access, from_access);
 
 	filter = isl_union_set_copy(kernel->thread_filter);
+	contraction = isl_union_pw_multi_aff_copy(kernel->contraction);
+	filter = isl_union_set_preimage_union_pw_multi_aff(filter, contraction);
 	filter = isl_union_set_apply(filter, isl_union_map_copy(access));
 	filter = isl_union_set_detect_equalities(filter);
 	filter = isl_union_set_coalesce(filter);
@@ -3458,7 +3569,6 @@ static __isl_give isl_schedule_node *add_copies_group_shared(
 	struct gpu_array_tile *tile;
 	isl_union_map *access;
 	isl_union_set *domain;
-	isl_union_set *sync;
 	isl_multi_aff *ma;
 	isl_multi_aff *from_access;
 	isl_multi_pw_aff *mpa;
@@ -3678,13 +3788,21 @@ static __isl_give isl_union_set *compute_sync_writes(
 	isl_union_map *equal;
 	isl_union_set *wrap;
 	isl_union_set *domain;
+	isl_union_pw_multi_aff *contraction;
 
-	domain = isl_schedule_node_get_universe_domain(node);
 	kernel_prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
 	node = isl_schedule_node_copy(node);
 	node = gpu_tree_move_down_to_thread(node, kernel->core);
 	thread_prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
 	isl_schedule_node_free(node);
+
+	contraction = kernel->contraction;
+	kernel_prefix = isl_union_map_preimage_domain_union_pw_multi_aff(
+		    kernel_prefix, isl_union_pw_multi_aff_copy(contraction));
+	thread_prefix = isl_union_map_preimage_domain_union_pw_multi_aff(
+		    thread_prefix, isl_union_pw_multi_aff_copy(contraction));
+	domain = isl_union_set_copy(kernel->expanded_domain);
+	domain = isl_union_set_universe(domain);
 
 	may_writes = isl_union_map_copy(kernel->prog->scop->tagged_may_writes);
 	may_writes = isl_union_map_curry(may_writes);
@@ -3796,8 +3914,9 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	isl_id *id;
 	isl_schedule_node *node_thread;
 	isl_union_map *host_schedule;
+	isl_union_pw_multi_aff *contraction;
 	isl_set *host_domain;
-	isl_union_set *domain;
+	isl_union_set *domain, *expanded;
 	int single_statement;
 
 	kernel = isl_calloc_type(gen->ctx, struct ppcg_kernel);
@@ -3813,8 +3932,13 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	kernel->options = gen->options;
 	kernel->context = extract_context(node, gen->prog);
 	kernel->core = isl_union_set_universe(isl_union_set_copy(domain));
-	kernel->arrays = accessed_by_domain(isl_union_set_copy(domain),
-						gen->prog);
+	contraction = isl_schedule_node_get_subtree_contraction(node);
+	kernel->contraction = isl_union_pw_multi_aff_copy(contraction);
+	expanded = isl_union_set_copy(domain);
+	expanded = isl_union_set_preimage_union_pw_multi_aff(expanded,
+						contraction);
+	kernel->expanded_domain = isl_union_set_copy(expanded);
+	kernel->arrays = accessed_by_domain(expanded, gen->prog);
 	kernel->n_grid = n_outer_coincidence(node);
 	node_thread = isl_schedule_node_copy(node);
 	node_thread = gpu_tree_move_down_to_thread(node_thread, kernel->core);
@@ -3901,6 +4025,10 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	kernel->copy_schedule_dim = isl_schedule_node_get_schedule_depth(node);
 	kernel->copy_schedule =
 		isl_schedule_node_get_prefix_schedule_union_pw_multi_aff(node);
+	contraction = isl_union_pw_multi_aff_copy(kernel->contraction);
+	kernel->copy_schedule =
+		isl_union_pw_multi_aff_pullback_union_pw_multi_aff(
+					    kernel->copy_schedule, contraction);
 
 	node = gpu_tree_move_up_to_kernel(node);
 
@@ -4075,16 +4203,25 @@ static __isl_give isl_union_set *get_initial_non_parallel_subtree_filters(
 
 /* Mark all variables that are accessed by the statement instances in "domain"
  * and that are local to "prog" as requiring a declaration in the host code.
+ * The statement instances in "domain" correspond to (a subset of)
+ * the active instances at "node".
+ * "node" is not modified by this function, except that NULL is returned
+ * in case of error.
  */
-static int declare_accessed_local_variables(struct gpu_prog *prog,
+static __isl_give isl_schedule_node *declare_accessed_local_variables(
+	__isl_take isl_schedule_node *node, struct gpu_prog *prog,
 	__isl_keep isl_union_set *domain)
 {
+	isl_union_pw_multi_aff *contraction;
 	isl_union_set *arrays;
 	int i;
 
 	if (!ppcg_scop_any_hidden_declarations(prog->scop))
-		return 0;
-	arrays = accessed_by_domain(isl_union_set_copy(domain), prog);
+		return node;
+	contraction = isl_schedule_node_get_subtree_contraction(node);
+	domain = isl_union_set_copy(domain);
+	domain = isl_union_set_preimage_union_pw_multi_aff(domain, contraction);
+	arrays = accessed_by_domain(domain, prog);
 
 	for (i = 0; i < prog->n_array; ++i) {
 		isl_space *space;
@@ -4104,10 +4241,10 @@ static int declare_accessed_local_variables(struct gpu_prog *prog,
 	}
 
 	isl_union_set_free(arrays);
-	return 0;
+	return node;
 error:
 	isl_union_set_free(arrays);
-	return -1;
+	return isl_schedule_node_free(node);
 }
 
 /* If "node" points to a set node, then separate its children
@@ -4135,19 +4272,11 @@ static __isl_give isl_schedule_node *isolate_permutable_subtrees(
 	type = isl_schedule_node_get_type(node);
 	if (type == isl_schedule_node_set) {
 		filter = get_all_non_parallel_subtree_filters(node);
-		if (!filter)
-			node = isl_schedule_node_free(node);
-
-		if (declare_accessed_local_variables(prog, filter) < 0)
-			node = isl_schedule_node_free(node);
+		node = declare_accessed_local_variables(node, prog, filter);
 		node = isl_schedule_node_order_after(node, filter);
 	} else if (type == isl_schedule_node_sequence) {
 		filter = get_initial_non_parallel_subtree_filters(node);
-		if (!filter)
-			node = isl_schedule_node_free(node);
-
-		if (declare_accessed_local_variables(prog, filter) < 0)
-			node = isl_schedule_node_free(node);
+		node = declare_accessed_local_variables(node, prog, filter);
 		node = isl_schedule_node_order_before(node, filter);
 	}
 
@@ -4278,6 +4407,8 @@ static __isl_give isl_schedule_constraints *construct_schedule_constraints(
  * We derive schedule constraints from the dependences in gen->prog->scop
  * and then use isl to compute a schedule that has a parallel loop
  * in each tilable band.
+ * During the schedule construction, some statement instances
+ * may be grouped first based on the input schedule.
  */
 static __isl_give isl_schedule *compute_schedule(struct gpu_gen *gen)
 {
@@ -4285,7 +4416,8 @@ static __isl_give isl_schedule *compute_schedule(struct gpu_gen *gen)
 	isl_schedule *schedule;
 
 	sc = construct_schedule_constraints(gen->prog);
-	schedule = isl_schedule_constraints_compute_schedule(sc);
+	schedule = gen->prog->scop->schedule;
+	schedule = ppcg_compute_schedule(sc, schedule, gen->options);
 
 	return schedule;
 }
@@ -4853,7 +4985,6 @@ static int update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 	isl_space *space;
 	isl_union_pw_multi_aff *contraction;
 	isl_union_set *before, *after, *filter;
-	isl_union_map *flow;
 
 	type = isl_schedule_node_get_parent_type(node);
 	if (type != isl_schedule_node_sequence && type != isl_schedule_node_set)
@@ -4952,7 +5083,6 @@ static __isl_give isl_union_set *node_may_persist(
 	__isl_keep isl_schedule_node *node, struct gpu_prog *prog)
 {
 	struct ppcg_may_persist_data data;
-	isl_schedule_node *root;
 	isl_union_pw_multi_aff *contraction;
 	isl_union_set *domain;
 	isl_union_set *persist;
@@ -4993,11 +5123,11 @@ static __isl_give isl_union_set *node_may_persist(
 
 /* Add nodes for copying outer arrays in and out of the device
  * before and after the subtree "node", which contains one or more kernels.
- * "domain" contains the original reaching domain elements before
- * the kernels were created, i.e., before the contraction that
- * may have been performed in creating the kernels has been applied.
+ * "domain" contains the original statement instances, i.e.,
+ * those that correspond to the domains of the access relations in "prog".
+ * In particular, the domain has not been contracted in any way.
  * "prefix" contains the prefix schedule at that point, in terms
- * of the same original reaching domain elements.
+ * of the same original statement instances.
  *
  * We first compute the sets of outer array elements that need
  * to be copied in and out and then graft in the nodes for
@@ -5035,7 +5165,7 @@ static __isl_give isl_schedule_node *add_to_from_device(
 	__isl_take isl_union_map *prefix, struct gpu_prog *prog)
 {
 	isl_union_set *local;
-	isl_union_set *to_device, *from_device, *may_persist;
+	isl_union_set *may_persist;
 	isl_union_map *may_write, *must_write, *copy_out, *not_written;
 	isl_union_map *read, *copy_in;
 	isl_union_map *tagged;
@@ -5151,6 +5281,7 @@ static __isl_give isl_schedule *map_to_device(struct gpu_gen *gen,
 	isl_set *guard;
 	isl_union_set *domain;
 	isl_union_map *prefix;
+	isl_union_pw_multi_aff *contraction;
 	struct gpu_prog *prog;
 
 	context = isl_set_copy(gen->prog->context);
@@ -5169,7 +5300,12 @@ static __isl_give isl_schedule *map_to_device(struct gpu_gen *gen,
 	//MK: Deactivate for now; this can cause syntax errors (scalars accesses ar arrays when scalar is declared locally) and incompatible when we have device-only buffers
 	//node = isolate_permutable_subtrees(node, gen->prog);
 	domain = isl_schedule_node_get_domain(node);
+	contraction = isl_schedule_node_get_subtree_contraction(node);
+	domain = isl_union_set_preimage_union_pw_multi_aff(domain,
+				    isl_union_pw_multi_aff_copy(contraction));
 	prefix = isl_schedule_node_get_prefix_schedule_union_map(node);
+	prefix = isl_union_map_preimage_domain_union_pw_multi_aff(prefix,
+				    contraction);
 	node = mark_kernels(gen, node);
 	node = add_to_from_device(node, domain, prefix, gen->prog);
 	node = isl_schedule_node_root(node);
@@ -5246,13 +5382,88 @@ error:
 	return NULL;
 }
 
+/* Does the index expression "index" of "expr" represent an access
+ * to a single element?
+ * That is, is "index" completely specified?
+ *
+ * If "expr" accesses elements from different spaces (i.e., fields
+ * of a structure), then it does not access a single element.
+ * Otherwise, if the single space of the access matches the space
+ * of "index", then the index expression is completely specified
+ * (no pointer to a lower-dimensional slice of the accessed array)
+ * and a single element is being accessed.
+ */
+static isl_bool complete_index(__isl_keep pet_expr *expr,
+	__isl_keep isl_multi_pw_aff *index)
+{
+	isl_union_map *read, *write, *all;
+	isl_map *map;
+	isl_space *space1, *space2;
+	isl_bool complete;
+
+	read = pet_expr_access_get_may_read(expr);
+	write = pet_expr_access_get_may_write(expr);
+	all = isl_union_map_union(read, write);
+	if (!all)
+		return isl_bool_error;
+	if (isl_union_map_n_map(all) != 1) {
+		isl_union_map_free(all);
+		return isl_bool_false;
+	}
+	map = isl_map_from_union_map(all);
+	space1 = isl_map_get_space(map);
+	isl_map_free(map);
+	space2 = isl_multi_pw_aff_get_space(index);
+	complete = isl_space_tuple_is_equal(space1, isl_dim_out,
+					    space2, isl_dim_out);
+	isl_space_free(space1);
+	isl_space_free(space2);
+
+	return complete;
+}
+
+/* Does "expr" access a single, fixed element (independently of the statement
+ * instance)?
+ * That is, does it have a completely specified constant index expression?
+ *
+ * Note that it is not sufficient for the index expression to be
+ * piecewise constant.  isl_multi_pw_aff_is_cst can therefore not be used.
+ */
+static isl_bool accesses_fixed_element(__isl_keep pet_expr *expr)
+{
+	int i, n;
+	isl_multi_pw_aff *index;
+	isl_bool fixed = isl_bool_true;
+
+	index = pet_expr_access_get_index(expr);
+	if (index < 0)
+		return isl_bool_error;
+	n = isl_multi_pw_aff_dim(index, isl_dim_out);
+	for (i = 0; i < n; ++i) {
+		isl_pw_aff *pa;
+
+		pa = isl_multi_pw_aff_get_pw_aff(index, 0);
+		fixed = isl_pw_aff_n_piece(pa) == 1;
+		if (fixed)
+			fixed = isl_pw_aff_is_cst(pa);
+		isl_pw_aff_free(pa);
+		if (fixed < 0 || !fixed)
+			break;
+	}
+	if (fixed >= 0 && fixed)
+		fixed = complete_index(expr, index);
+	isl_multi_pw_aff_free(index);
+
+	return fixed;
+}
+
 /* Extract a gpu_stmt_access from "expr", append it to the list
  * that ends in *data->next_access and update the end of the list.
  * If the access expression performs a write, then it is considered
  * exact only if it appears in a single expression statement and
  * if its may access relation is equal to its must access relation.
  *
- * The combined set of may accesses may be union if member accesses
+ * The combined set of may accesses may be a union if member accesses
  * are involved, but the entire set is derived from a single reference and
  * therefore from a single index expression.  These accesses therefore
  * all map to the same outer array.
@@ -5295,11 +5506,12 @@ static int extract_access(__isl_keep pet_expr *expr, void *user)
 	access->tagged_access = extract_single_tagged_access(tagged, expr);
 	access->access = isl_map_copy(access->tagged_access);
 	access->access = isl_map_domain_factor_domain(access->access);
+	access->fixed_element = accesses_fixed_element(expr);
 
 	*data->next_access = access;
 	data->next_access = &(*data->next_access)->next;
 
-	if (!access->access)
+	if (!access->access || access->fixed_element < 0)
 		return -1;
 
 	return 0;
@@ -5323,7 +5535,28 @@ static int pet_stmt_extract_accesses(struct gpu_stmt *stmt,
 						&extract_access, &data);
 }
 
+/* Has statement "stmt" been killed from "scop"?
+ * That is, is the instance set of "scop" free from any
+ * instances of "stmt"?
+ */
+static isl_bool is_stmt_killed(struct ppcg_scop *scop, struct pet_stmt *stmt)
+{
+	isl_space *space;
+	isl_set *left;
+	isl_bool empty;
+
+	if (!scop || !stmt)
+		return isl_bool_error;
+	space = isl_set_get_space(stmt->domain);
+	left = isl_union_set_extract_set(scop->domain, space);
+	empty = isl_set_plain_is_empty(left);
+	isl_set_free(left);
+
+	return empty;
+}
+
 /* Return an array of gpu_stmt representing the statements in "scop".
+ * Do not collect array accesses for statements that have been killed.
  */
 static struct gpu_stmt *extract_stmts(isl_ctx *ctx, struct ppcg_scop *scop,
 	__isl_keep isl_set *context, __isl_keep isl_union_map *any_to_outer)
@@ -5337,9 +5570,15 @@ static struct gpu_stmt *extract_stmts(isl_ctx *ctx, struct ppcg_scop *scop,
 
 	for (i = 0; i < scop->pet->n_stmt; ++i) {
 		struct gpu_stmt *s = &stmts[i];
+		isl_bool killed;
 
 		s->id = isl_set_get_tuple_id(scop->pet->stmts[i]->domain);
 		s->stmt = scop->pet->stmts[i];
+		killed = is_stmt_killed(scop, scop->pet->stmts[i]);
+		if (killed < 0)
+			return free_stmts(stmts, i + 1);
+		if (killed)
+			continue;
 		if (pet_stmt_extract_accesses(s, any_to_outer) < 0)
 			return free_stmts(stmts, i + 1);
 	}

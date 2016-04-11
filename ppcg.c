@@ -182,7 +182,6 @@ __isl_give isl_id_list *ppcg_scop_generate_names(struct ppcg_scop *scop,
 	int n, const char *prefix)
 {
 	int i;
-	char name[10];
 	isl_ctx *ctx;
 	isl_id_list *names;
 
@@ -381,7 +380,6 @@ static void compute_live_out(struct ppcg_scop *ps)
 	isl_union_map *kills;
 	isl_union_map *exposed;
 	isl_union_map *covering;
-	isl_union_set *accessed;
 	isl_union_access_info *access;
 	isl_union_flow *flow;
 
@@ -1033,7 +1031,9 @@ int main(int argc, char **argv)
 	ppcg_options_set_target_defaults(options->ppcg);
 	isl_options_set_ast_build_detect_min_max(ctx, 1);
 	isl_options_set_ast_print_macro_once(ctx, 1);
+	isl_options_set_schedule_whole_component(ctx, 0);
 	isl_options_set_schedule_maximize_band_depth(ctx, 1);
+	isl_options_set_schedule_maximize_coincidence(ctx, 1);
 	pet_options_set_encapsulate_dynamic_control(ctx, 1);
 	argc = options_parse(options, argc, argv, ISL_ARG_ALL);
 

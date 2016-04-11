@@ -451,6 +451,9 @@ static int can_tile(__isl_keep isl_map *access, struct gpu_array_tile *tile)
  * thread_sched contains the first (thread_depth + n_thread) dimensions
  * of the kernel schedule.
  * full_sched is a union_map representation of the entire kernel schedule.
+ * The schedules are all formulated in terms of the original statement
+ * instances, i.e., those that appear in the domains of the access
+ * relations.
  */
 struct gpu_group_data {
 	struct ppcg_scop *scop;
@@ -1311,7 +1314,6 @@ static int group_common_shared_memory_tile(struct ppcg_kernel *kernel,
 {
 	int i, j;
 	int recompute_overlap = 0;
-	isl_ctx *ctx = isl_space_get_ctx(array->space);
 
 	for (i = 0; i < n; ++i) {
 		if (!groups[i]->shared_tile)
@@ -1362,7 +1364,7 @@ static int group_common_shared_memory_tile(struct ppcg_kernel *kernel,
 static void set_array_groups(struct gpu_local_array_info *array,
 	int n, struct gpu_array_ref_group **groups)
 {
-	int i, j;
+	int i;
 
 	array->n_group = n;
 	array->groups = groups;
@@ -1405,7 +1407,8 @@ static int join_all_groups(int n, struct gpu_array_ref_group **groups)
  * If the array contains structures, then we compute a single
  * reference group without trying to find any tiles
  * since we do not map such arrays to private or shared
- * memory.
+ * memory.  The only exception is when those arrays of structures
+ * are required to be mapped to private memory.
  */
 static int group_array_references(struct ppcg_kernel *kernel,
 	struct gpu_local_array_info *local, struct gpu_group_data *data)
@@ -1422,7 +1425,7 @@ static int group_array_references(struct ppcg_kernel *kernel,
 
 	n = populate_array_references(local, groups, data);
 
-	if (local->array->has_compound_element) {
+	if (local->array->has_compound_element && !local->force_private) {
 		n = join_all_groups(n, groups);
 		set_array_groups(local, n, groups);
 		return 0;
@@ -1449,42 +1452,52 @@ static int group_array_references(struct ppcg_kernel *kernel,
 	return -1;
 }
 
-/* For each scalar in the input program, check if there are any
- * order dependences active inside the current kernel, within
- * the same iteration of "host_schedule".
- * If so, mark the scalar as force_private so that it will be
- * mapped to a register.
+/* For each array in the input program that can be mapped to private memory,
+ * check if there are any order dependences active inside the current kernel,
+ * within the same iteration of the host schedule, i.e., the prefix
+ * schedule at "node".
+ * If so, mark the array as force_private so that its reference groups will be
+ * mapped to a registers.
+ *
+ * Note that the arrays that cannot be mapped to private memory have
+ * had their order dependences added to prog->array_order and
+ * subsequently to the coincidence constraints.
  */
-static void check_scalar_live_ranges_in_host(struct ppcg_kernel *kernel,
-	__isl_take isl_union_map *host_schedule)
+static void check_can_be_private_live_ranges(struct ppcg_kernel *kernel,
+	__isl_keep isl_schedule_node *node)
 {
 	int i;
 	isl_union_map *sched;
 	isl_union_set *domain;
-	isl_union_map *same_host_iteration;
+	isl_multi_union_pw_aff *prefix;
+	isl_union_pw_multi_aff *contraction;
+
+	if (!kernel->options->live_range_reordering)
+		return;
 
 	kernel->any_force_private = 0;
 
-	sched = isl_union_map_universe(isl_union_map_copy(host_schedule));
-	domain = isl_union_map_domain(sched);
-
-	same_host_iteration = isl_union_map_apply_range(host_schedule,
-		    isl_union_map_reverse(isl_union_map_copy(host_schedule)));
+	prefix = isl_schedule_node_get_prefix_schedule_multi_union_pw_aff(node);
+	contraction = isl_union_pw_multi_aff_copy(kernel->contraction);
+	prefix = isl_multi_union_pw_aff_pullback_union_pw_multi_aff(prefix,
+								contraction);
+	domain = isl_union_set_copy(kernel->expanded_domain);
+	domain = isl_union_set_universe(domain);
 
 	for (i = 0; i < kernel->n_array; ++i) {
 		struct gpu_local_array_info *local = &kernel->array[i];
 		isl_union_map *order;
 
 		local->force_private = 0;
-		if (local->array->n_index != 0)
+		if (!gpu_array_can_be_private(local->array))
 			continue;
 		order = isl_union_map_copy(local->array->dep_order);
 		order = isl_union_map_intersect_domain(order,
 						    isl_union_set_copy(domain));
 		order = isl_union_map_intersect_range(order,
 						    isl_union_set_copy(domain));
-		order = isl_union_map_intersect(order,
-				    isl_union_map_copy(same_host_iteration));
+		order = isl_union_map_eq_at_multi_union_pw_aff(order,
+					isl_multi_union_pw_aff_copy(prefix));
 		if (!isl_union_map_is_empty(order)) {
 			local->force_private = 1;
 			kernel->any_force_private = 1;
@@ -1492,45 +1505,29 @@ static void check_scalar_live_ranges_in_host(struct ppcg_kernel *kernel,
 		isl_union_map_free(order);
 	}
 
-	isl_union_map_free(same_host_iteration);
+	isl_multi_union_pw_aff_free(prefix);
 	isl_union_set_free(domain);
-}
-
-/* For each scalar in the input program, check if there are any
- * order dependences active inside the current kernel, within
- * the same iteration of the host schedule, i.e., the prefix
- * schedule at "node".
- * If so, mark the scalar as force_private so that it will be
- * mapped to a register.
- */
-static void check_scalar_live_ranges(struct ppcg_kernel *kernel,
-	__isl_keep isl_schedule_node *node)
-{
-	isl_union_map *sched;
-
-	if (!kernel->options->live_range_reordering)
-		return;
-
-	sched = isl_schedule_node_get_prefix_schedule_union_map(node);
-
-	check_scalar_live_ranges_in_host(kernel, sched);
 }
 
 /* Create a set of dimension data->thread_depth + data->n_thread
  * that equates the residue of the final data->n_thread dimensions
- * modulo the "sizes" to the thread identifiers.
- * "space" is a parameter space containing the thread identifiers.
+ * modulo the kernel->block_dim sizes to the thread identifiers.
  * Store the computed set in data->privatization.
+ *
+ * The construction starts with the space of kernel->thread_filter,
+ * which is known to reference all thread identifiers.
  */
 static void compute_privatization(struct gpu_group_data *data,
-	__isl_take isl_space *space, int *sizes)
+	struct ppcg_kernel *kernel)
 {
 	int i;
 	isl_ctx *ctx;
+	isl_space *space;
 	isl_local_space *ls;
 	isl_set *set;
 
 	ctx = isl_union_map_get_ctx(data->shared_sched);
+	space = isl_union_set_get_space(kernel->thread_filter);
 	space = isl_space_set_from_params(space);
 	space = isl_space_add_dims(space, isl_dim_set,
 				    data->thread_depth + data->n_thread);
@@ -1542,15 +1539,16 @@ static void compute_privatization(struct gpu_group_data *data,
 		isl_aff *aff, *aff2;
 		isl_constraint *c;
 		isl_val *v;
-		char name[20];
+		isl_id *id;
 		int pos;
 
 		aff = isl_aff_var_on_domain(isl_local_space_copy(ls),
 					isl_dim_set, data->thread_depth + i);
-		v = isl_val_int_from_si(ctx, sizes[i]);
+		v = isl_val_int_from_si(ctx, kernel->block_dim[i]);
 		aff = isl_aff_mod_val(aff, v);
-		snprintf(name, sizeof(name), "t%d", i);
-		pos = isl_set_find_dim_by_name(set, isl_dim_param, name);
+		id = isl_id_list_get_id(kernel->thread_ids, i);
+		pos = isl_set_find_dim_by_id(set, isl_dim_param, id);
+		isl_id_free(id);
 		aff2 = isl_aff_var_on_domain(isl_local_space_copy(ls),
 					isl_dim_param, pos);
 		aff = isl_aff_sub(aff, aff2);
@@ -1574,10 +1572,10 @@ int gpu_group_references(struct ppcg_kernel *kernel,
 {
 	int i;
 	int r = 0;
-	isl_space *space;
+	isl_union_pw_multi_aff *contraction;
 	struct gpu_group_data data;
 
-	check_scalar_live_ranges(kernel, node);
+	check_can_be_private_live_ranges(kernel, node);
 
 	data.scop = kernel->prog->scop;
 
@@ -1597,14 +1595,22 @@ int gpu_group_references(struct ppcg_kernel *kernel,
 	data.thread_sched = isl_union_map_flat_range_product(data.thread_sched,
 		isl_schedule_node_band_get_partial_schedule_union_map(node));
 	data.thread_sched = isl_union_map_detect_equalities(data.thread_sched);
+
+	contraction = isl_union_pw_multi_aff_copy(kernel->contraction);
+	data.host_sched = isl_union_map_preimage_domain_union_pw_multi_aff(
+		data.host_sched, isl_union_pw_multi_aff_copy(contraction));
+	data.shared_sched = isl_union_map_preimage_domain_union_pw_multi_aff(
+		data.shared_sched, isl_union_pw_multi_aff_copy(contraction));
+	data.thread_sched = isl_union_map_preimage_domain_union_pw_multi_aff(
+		data.thread_sched, contraction);
+
 	node = isl_schedule_node_child(node, 0);
 	data.full_sched = isl_union_map_copy(data.thread_sched);
 	data.full_sched = isl_union_map_flat_range_product(data.full_sched,
 		isl_schedule_node_get_subtree_schedule_union_map(node));
 	isl_schedule_node_free(node);
 
-	space = isl_union_set_get_space(kernel->thread_filter);
-	compute_privatization(&data, space, kernel->block_dim);
+	compute_privatization(&data, kernel);
 
 	for (i = 0; i < kernel->n_array; ++i) {
 		r = group_array_references(kernel, &kernel->array[i], &data);
@@ -1713,7 +1719,6 @@ void gpu_array_ref_group_compute_tiling(struct gpu_array_ref_group *group)
 {
 	int i;
 	struct gpu_array_tile *tile;
-	struct gpu_array_info *array = group->array;
 	isl_space *space;
 	isl_multi_aff *tiling, *lb, *insert_array;
 	isl_printer *p;

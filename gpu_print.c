@@ -29,13 +29,13 @@ __isl_give isl_printer *gpu_print_local_declarations(__isl_take isl_printer *p,
 		return isl_printer_free(p);
 
 	for (i = 0; i < prog->n_array; ++i) {
+		struct gpu_array_info *array = &prog->array[i];
 		isl_ast_expr *size;
 
-		if (!prog->array[i].declare_local)
+		if (!array->declare_local)
 			continue;
-		size = prog->array[i].declared_size;
-		p = ppcg_print_declaration_with_size(p,
-					    prog->scop->pet->arrays[i], size);
+		size = array->declared_size;
+		p = ppcg_print_declaration_with_size(p, array->type, size);
 	}
 
 	return p;
@@ -138,9 +138,7 @@ static __isl_give isl_printer *stmt_print_local_index(__isl_take isl_printer *p,
 static __isl_give isl_printer *stmt_print_global_index(
 	__isl_take isl_printer *p, struct ppcg_kernel_stmt *stmt)
 {
-	int i;
 	struct gpu_array_info *array = stmt->u.c.array;
-	struct gpu_local_array_info *local = stmt->u.c.local_array;
 	isl_ast_expr *index;
 
 	if (gpu_array_is_scalar(array)) {

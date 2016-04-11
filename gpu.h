@@ -23,6 +23,8 @@ struct gpu_stmt_access {
 	int write;
 	/* All writes are definite writes. */
 	int exact_write;
+	/* Is a single, fixed element being accessed? */
+	isl_bool fixed_element;
 	/* The number of index expressions specified in the access. */
 	int n_index;
 
@@ -38,11 +40,18 @@ struct gpu_stmt_access {
 	struct gpu_stmt_access *next;
 };
 
+/* A representation of a user statement.
+ * "stmt" points to the corresponding pet statement.
+ * "id" is the identifier of the instance set of the statement.
+ * "accesses" is a linked list of accesses performed by the statement.
+ * If the statement has been killed, i.e., if it will not be scheduled,
+ * then this linked list may be empty even if the actual statement does
+ * perform accesses.
+ */
 struct gpu_stmt {
 	isl_id *id;
 	struct pet_stmt *stmt;
 
-	/* Linked list of accesses. */
 	struct gpu_stmt_access *accesses;
 };
 
@@ -57,6 +66,8 @@ struct gpu_array_info {
 	int size;
 	/* Name of the array. */
 	char *name;
+	/* Declared extent of original array. */
+	isl_set *declared_extent;
 	/* AST expression for declared size of original array. */
 	isl_ast_expr *declared_size;
 	/* Extent of the array that needs to be copied. */
@@ -82,6 +93,9 @@ struct gpu_array_info {
 
 	/* Are the elements of the array structures? */
 	int has_compound_element;
+
+	/* Are the elements only accessed through constant index expressions? */
+	int only_fixed_element;
 
 	/* Is the array local to the scop? */
 	int local;
@@ -169,7 +183,7 @@ struct gpu_prog {
 	/* A mapping from the outer arrays to all corresponding inner arrays. */
 	isl_union_map *to_inner;
 	/* A mapping from all intermediate arrays to their outer arrays,
-	 * including an identity mapping from the anoymous 1D space to itself.
+	 * including an identity mapping from the anonymous 1D space to itself.
 	 */
 	isl_union_map *any_to_outer;
 
@@ -314,6 +328,13 @@ struct ppcg_kernel_var {
  * the tree during the construction of the device part of the schedule
  * tree in create_kernel.
  *
+ * expanded_domain contains the original statement instances,
+ * i.e., those that appear in the domains of access relations,
+ * that are involved in the kernel.
+ * contraction maps those original statement instances to
+ * the statement instances that are active at the point
+ * in the schedule tree where the kernel is created.
+ *
  * arrays is the set of possibly accessed outer array elements.
  *
  * space is the schedule space of the AST context.  That is, it represents
@@ -340,6 +361,8 @@ struct ppcg_kernel_var {
  * copy_schedule corresponds to the schedule dimensions of
  * the (tiled) schedule for this kernel that have been taken into account
  * for computing private/shared memory tiles.
+ * The domain corresponds to the original statement instances, i.e.,
+ * those that appear in the leaves of the schedule tree.
  * copy_schedule_dim is the dimension of this schedule.
  *
  * sync_writes contains write references that require synchronization.
@@ -370,6 +393,9 @@ struct ppcg_kernel {
 	isl_union_set *core;
 	isl_union_set *arrays;
 
+	isl_union_pw_multi_aff *contraction;
+	isl_union_set *expanded_domain;
+
 	isl_space *space;
 
 	int n_array;
@@ -394,6 +420,7 @@ int gpu_array_is_scalar(struct gpu_array_info *array);
 int gpu_array_is_read_only_scalar(struct gpu_array_info *array);
 int gpu_array_requires_device_allocation(struct gpu_array_info *array);
 __isl_give isl_set *gpu_array_positive_size_guard(struct gpu_array_info *array);
+isl_bool gpu_array_can_be_private(struct gpu_array_info *array);
 
 struct gpu_prog *gpu_prog_alloc(isl_ctx *ctx, struct ppcg_scop *scop);
 void *gpu_prog_free(struct gpu_prog *prog);
