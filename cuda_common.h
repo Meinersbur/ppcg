@@ -9,7 +9,9 @@ struct cuda_info {
 	FILE *kernel_h;
 };
 
-void cuda_open_files(struct cuda_info *info, const char *input, const char *output);
+struct ppcg_options;
+
+void cuda_open_files(struct cuda_info *info, struct ppcg_options *options, const char *input, const char *output);
 void cuda_close_files(struct cuda_info *info);
 
 #endif

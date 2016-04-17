@@ -125,4 +125,10 @@ ISL_ARG_STR(struct ppcg_options, save_schedule_file, 0, "save-schedule",
 ISL_ARG_STR(struct ppcg_options, load_schedule_file, 0, "load-schedule",
 	"file", NULL, "load schedule from <file>, "
 	"using it instead of an isl computed schedule")
+ISL_ARG_STR_LIST(struct ppcg_options, n_host_includes,
+        host_includes, 0, "host-include-file", "filename",
+        "file to #include in generated kernel code")
+ISL_ARG_STR_LIST(struct ppcg_options, n_kernel_includes,
+        kernel_includes, 0, "kernel-include-file", "filename",
+        "file to #include in host code")
 ISL_ARGS_END

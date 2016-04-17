@@ -74,6 +74,12 @@ struct ppcg_options {
 	char *save_schedule_file;
 	/* Name of file for loading schedule or NULL. */
 	char *load_schedule_file;
+
+	int n_host_includes;
+	const char **host_includes;
+
+	int n_kernel_includes;
+	const char **kernel_includes;
 };
 
 ISL_ARG_DECL(ppcg_debug_options, struct ppcg_debug_options,

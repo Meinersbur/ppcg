@@ -115,13 +115,21 @@ static int opencl_open_files(struct opencl_info *info)
 		fprintf(info->kernel_c, "#include <assert.h>\n");
 		fprintf(info->kernel_c, "#include <stdio.h>\n");
 		fprintf(info->kernel_c, "#include \"ocl_utilities.h\"\n");
-	} else {
-		fputs("#include <prl_scop.h>\n", info->kernel_c);
+//	} else {
+//		fputs("#include <prl_scop.h>\n", info->kernel_c);
 	}
 
 	if (info->options->opencl_embed_kernel_code) {
 		fprintf(info->kernel_c, "#include \"%s\"\n\n",
 			info->kernel_cl_name);
+	}
+
+	for (i = 0; i < info->options->n_host_includes; ++i) {
+		fprintf(info->host_c, "#include <%s>\n", info->options->host_includes[i]);
+	}
+
+	for (i = 0; i < info->options->n_kernel_includes; ++i) {
+		fprintf(info->kernel_c, "#include <%s>\n", info->options->kernel_includes[i]);
 	}
 
 	for (i = 0; i < info->options->opencl_n_include_file; ++i) {

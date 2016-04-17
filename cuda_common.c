@@ -18,10 +18,10 @@
 /* Open the host .cu file and the kernel .hu and .cu files for writing.
  * Add the necessary includes.
  */
-void cuda_open_files(struct cuda_info *info, const char *input, const char *output)
+void cuda_open_files(struct cuda_info *info, struct ppcg_options *options, const char *input, const char *output)
 {
     char name[PATH_MAX];
-    int len;
+    int len, i;
 
 	if (output) {
 		const char *ext;
@@ -50,6 +50,14 @@ void cuda_open_files(struct cuda_info *info, const char *input, const char *outp
 	//fprintf(info->kernel_cu, "#include <pencil_kernel_cu.h>\n");
 	fprintf(info->kernel_cu, "#include <stdio.h>\n"); // fprintf, fflush
 	fprintf(info->kernel_cu, "#include <assert.h>\n"); // assert
+
+	for (i = 0; i < options->n_host_includes; ++i) {
+		fprintf(info->host_c, "#include <%s>\n", options->host_includes[i]);
+	}
+
+	for (i = 0; i < options->n_kernel_includes; ++i) {
+		fprintf(info->kernel_cu, "#include <%s>\n", options->kernel_includes[i]);
+	}
 
 	//TODO: Header guard
     fprintf(info->kernel_h, "#ifdef __cplusplus\n");
