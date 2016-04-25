@@ -901,11 +901,19 @@ static __isl_give isl_printer *opencl_print_sync(__isl_take isl_printer *p,
 static struct ppcg_opencl_fn {
 	const char *name;
 	const char *opencl_name;
-	const char *type;
+	const char *type[4]; // One more than max arguments to catch overflow
 } opencl_fn[] = {
-	{ "expf",	"exp",		"float" },
-	{ "powf",	"pow",		"float" },
-	{ "sqrtf",	"sqrt",		"float" },
+	{ "exp",	"exp",		{ "double" } },
+	{ "expf",	"exp",		{ "float"  } },
+
+	{ "pow",	"pow",		{ "double" } },
+	{ "powf",	"pow",		{ "float"  } },
+
+	{ "sqrt",	"sqrt",		{ "double" } },
+	{ "sqrtf",	"sqrt",		{ "float"  } },
+
+	{ "mix",	"mix",		{ "double", "double", "double" } },
+	{ "mixf",	"mix",		{ "float",  "float",  "float"  } },
 };
 
 #define ARRAY_SIZE(array) (sizeof(array)/sizeof(*array))
@@ -918,7 +926,8 @@ static __isl_give pet_expr *map_opencl_call(__isl_take pet_expr *expr,
 	void *user)
 {
 	const char *name;
-	int i;
+	int i, j;
+	int n_arg;
 
 	name = pet_expr_call_get_name(expr);
 	for (i = 0; i < ARRAY_SIZE(opencl_fn); ++i) {
@@ -927,9 +936,14 @@ static __isl_give pet_expr *map_opencl_call(__isl_take pet_expr *expr,
 		if (strcmp(name, opencl_fn[i].name))
 			continue;
 		expr = pet_expr_call_set_name(expr, opencl_fn[i].opencl_name);
-		arg = pet_expr_get_arg(expr, 0);
-		arg = pet_expr_new_cast(opencl_fn[i].type, arg);
-		expr = pet_expr_set_arg(expr, 0, arg);
+
+		n_arg = pet_expr_get_n_arg(expr);
+		for (j = 0; j < n_arg; ++j) {
+			arg = pet_expr_get_arg(expr, j);
+			const char *newtype = opencl_fn[i].type[j];
+			arg = pet_expr_new_cast(opencl_fn[i].type[j], arg);
+			expr = pet_expr_set_arg(expr, j, arg);
+		}
 	}
 	return expr;
 }
