@@ -324,11 +324,12 @@ static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct
 }
 
 static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struct gpu_prog *prog,  __isl_give isl_printer *(*callback)(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, isl_id *param, struct gpu_array_info *array,  void *user), void *user) {
+	int i;
 	bool firstarg = true;
 
 	// Parameter arguments
 	int n_params = isl_set_n_param(prog->context);
-	for (int i = 0; i < n_params; ++i) {
+	for (i = 0; i < n_params; ++i) {
 		isl_id *id = isl_set_get_dim_id(prog->context, isl_dim_param, i);
 		p = (*callback)(p, prog, firstarg, id, NULL, user);
 		isl_id_free(id);
@@ -336,7 +337,7 @@ static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struc
 	}
 
 	// Array arguments
-	for (int i = 0; i < prog->n_array; ++i) {
+	for (i = 0; i < prog->n_array; ++i) {
 		struct gpu_array_info *array = &prog->array[i];
 		//pet_array_dump(array->);
 		//printf("ARRAY %5s %4s [%d]=%d read_only_scalar=%d local=%d declare_local=%d global=%d linearize=%d\n", array->type, array->name, array->n_index, array->size, array->read_only_scalar, array->local, array->declare_local, array->global, array->linearize);

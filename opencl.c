@@ -903,6 +903,22 @@ static struct ppcg_opencl_fn {
 	const char *opencl_name;
 	const char *type[4]; // One more than max arguments to catch overflow
 } opencl_fn[] = {
+	{ "abs",	"abs",		{ "int" } },
+	{ "labs",	"abs",		{ "long" } },
+	{ "llabs",	"abs",		{ "long long" } },
+
+	{ "min",	"min",		{ "int", "int" } },
+	{ "lmin",	"min",		{ "long", "long" } },
+	{ "llmin",	"min",		{ "long long", "long long" } },
+	{ "fmin",	"min",		{ "double", "double" } },
+	{ "fminf",	"min",		{ "float", "float" } },
+
+	{ "max",	"max",		{ "int", "int" } },
+	{ "lmax",	"max",		{ "long", "long" } },
+	{ "llmax",	"max",		{ "long long", "long long" } },
+	{ "fmax",	"max",		{ "double", "double" } },
+	{ "fmaxf",	"max",		{ "float", "float" } },
+
 	{ "exp",	"exp",		{ "double" } },
 	{ "expf",	"exp",		{ "float"  } },
 
@@ -914,6 +930,21 @@ static struct ppcg_opencl_fn {
 
 	{ "mix",	"mix",		{ "double", "double", "double" } },
 	{ "mixf",	"mix",		{ "float",  "float",  "float"  } },
+
+	{ "atan2",	"atan2",	{ "double", "double" } },
+	{ "atan2f",	"atan2",	{ "float",  "float"  } },
+
+	{ "atan2pi",	"atan2pi",	{ "double", "double" } },
+	{ "atan2pif",	"atan2pi",	{ "float",  "float"  } },
+
+	{ "hypot",	"hypot",	{ "double", "double" } },
+	{ "hypotf",	"hypot",	{ "float",  "float"  } },
+
+	{ "floor",	"floor",	{ "double" } },
+	{ "floorf",	"floor",	{ "float" } },
+
+	{ "ceil",	"ceil",		{ "double" } },
+	{ "ceilf",	"ceil",		{ "float" } },
 };
 
 #define ARRAY_SIZE(array) (sizeof(array)/sizeof(*array))
@@ -941,11 +972,16 @@ static __isl_give pet_expr *map_opencl_call(__isl_take pet_expr *expr,
 		for (j = 0; j < n_arg; ++j) {
 			arg = pet_expr_get_arg(expr, j);
 			const char *newtype = opencl_fn[i].type[j];
+			if (!newtype)
+				goto error;
 			arg = pet_expr_new_cast(opencl_fn[i].type[j], arg);
 			expr = pet_expr_set_arg(expr, j, arg);
 		}
 	}
 	return expr;
+error:
+	pet_expr_free(expr);
+	return NULL;
 }
 
 /* Print the body of a statement from the input program,
@@ -1608,7 +1644,7 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 	const char *input, const char *output)
 {
 	struct opencl_info opencl = { options, input, output };
-	int r;
+	int r, i;
 
 	opencl.kprinter = isl_printer_to_str(ctx);
 	r = opencl_open_files(&opencl);
@@ -1621,7 +1657,7 @@ int generate_opencl(isl_ctx *ctx, struct ppcg_options *options,
 		r = -1;
 	isl_printer_free(opencl.kprinter);
 
-	for (int i = 0; i < opencl.types_c.n; ++i)
+	for (i = 0; i < opencl.types_c.n; ++i)
 		free(opencl.types_c.name[i]);
 	free(opencl.types_c.name);
 
