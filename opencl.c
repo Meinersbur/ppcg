@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <string.h>
+#include <assert.h>
 
 #include <isl/aff.h>
 #include <isl/ast.h>
@@ -133,11 +134,33 @@ static int opencl_open_files(struct opencl_info *info)
 	}
 
 	for (i = 0; i < info->options->opencl_n_include_file; ++i) {
-		info->kprinter = isl_printer_print_str(info->kprinter,
-					"#include <");
-		info->kprinter = isl_printer_print_str(info->kprinter,
-					info->options->opencl_include_files[i]);
-		info->kprinter = isl_printer_print_str(info->kprinter, ">\n");
+		const char *filepath = info->options->opencl_include_files[i];
+		if (info->options->opencl_embed_kernel_code) {
+			FILE* fp = fopen(filepath, "r");
+			if (!fp) {
+				fprintf(stderr, "Failed to open \"%s\" for reading\n", filepath);
+				return -1;
+			}
+
+			fseek(fp, 0, SEEK_END);
+			long size = ftell(fp);
+			rewind(fp);
+
+			char *str = malloc(size + 1);
+			size_t read = fread(str, sizeof(char), size, fp);
+			assert(read == size);
+			fclose(fp);
+
+			str[size] = '\0';
+			isl_printer_print_str(info->kprinter, "\n");
+			isl_printer_print_str(info->kprinter, str);
+			isl_printer_print_str(info->kprinter, "\n");
+			free(str);
+		} else {
+			info->kprinter = isl_printer_print_str(info->kprinter, "#include <");
+			info->kprinter = isl_printer_print_str(info->kprinter, filepath);
+			info->kprinter = isl_printer_print_str(info->kprinter, ">\n");
+		}
 	}
 
 	return 0;
