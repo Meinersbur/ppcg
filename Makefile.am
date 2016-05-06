@@ -65,7 +65,8 @@ EXTRA_DIST = \
 	autogen.sh \
 	ocl_utilities.c \
 	ocl_utilities.h \
-	tests
+	tests \
+	examples/chemv.c
 
 CLEANFILES = gitversion.h
 
