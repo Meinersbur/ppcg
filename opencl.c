@@ -901,23 +901,37 @@ static __isl_give isl_printer *opencl_print_sync(__isl_take isl_printer *p,
 static struct ppcg_opencl_fn {
 	const char *name;
 	const char *opencl_name;
-	const char *type[4]; // One more than max arguments to catch overflow
+	const char *type[4]; // One more than max arguments to catch overflow.
 } opencl_fn[] = {
 	{ "abs",	"abs",		{ "int" } },
 	{ "labs",	"abs",		{ "long" } },
-	{ "llabs",	"abs",		{ "long long" } },
+//	{ "llabs",	"abs",		{ "long long" } },
+	{ "fabs",	"fabs",		{ "double" } },
+	{ "fabsf",	"fabs",		{ "float" } },
 
 	{ "min",	"min",		{ "int", "int" } },
 	{ "lmin",	"min",		{ "long", "long" } },
-	{ "llmin",	"min",		{ "long long", "long long" } },
+//	{ "llmin",	"min",		{ "long long", "long long" } },
 	{ "fmin",	"min",		{ "double", "double" } },
 	{ "fminf",	"min",		{ "float", "float" } },
 
 	{ "max",	"max",		{ "int", "int" } },
 	{ "lmax",	"max",		{ "long", "long" } },
-	{ "llmax",	"max",		{ "long long", "long long" } },
+//	{ "llmax",	"max",		{ "long long", "long long" } },
 	{ "fmax",	"max",		{ "double", "double" } },
 	{ "fmaxf",	"max",		{ "float", "float" } },
+
+	{ "clamp",	"clamp",	{ "int", "int", "int" } },
+	{ "lclamp",	"clamp",	{ "long", "long", "long" } },
+//	{ "llclamp","clamp",	{ "long long", "long long", "long long" } },
+	{ "fclamp",	"clamp",	{ "double", "double", "double" } },
+	{ "fclampf","clamp",	{ "float", "float", "float" } },
+
+	{ "sin",	"sin",		{ "double" } },
+	{ "sinf",	"sin",		{ "float"  } },
+
+	{ "cos",	"cos",		{ "double" } },
+	{ "cosf",	"cos",		{ "float"  } },
 
 	{ "exp",	"exp",		{ "double" } },
 	{ "expf",	"exp",		{ "float"  } },
