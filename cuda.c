@@ -766,7 +766,7 @@ int generate_cuda(isl_ctx *ctx, struct ppcg_options *options,
 
 	r = generate_gpu(ctx, input, cuda.host_c, options, &print_cuda, &cuda);
 
-	cuda_close_files(&cuda);
+	cuda_close_files(&cuda, options);
 
 	return r;
 }

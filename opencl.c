@@ -219,7 +219,13 @@ static int opencl_write_kernel_file(struct opencl_info *opencl)
  */
 static int opencl_close_files(struct opencl_info *info)
 {
-	int r = 0;
+	int r = 0, i;
+
+	if (info->options->n_host_appends)
+		fprintf(info->host_c, "\n");
+	for (i = 0; i < info->options->n_host_appends; ++i) {
+		fprintf(info->host_c, "#include <%s>\n", info->options->host_appends[i]);
+	}
 
 	if (info->kernel_cl) {
 		r = opencl_write_kernel_file(info);

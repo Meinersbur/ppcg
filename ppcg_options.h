@@ -77,6 +77,8 @@ struct ppcg_options {
 
 	int n_host_includes;
 	const char **host_includes;
+	int n_host_appends;
+	const char **host_appends;
 
 	int n_kernel_includes;
 	const char **kernel_includes;

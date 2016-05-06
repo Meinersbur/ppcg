@@ -127,8 +127,11 @@ ISL_ARG_STR(struct ppcg_options, load_schedule_file, 0, "load-schedule",
 	"using it instead of an isl computed schedule")
 ISL_ARG_STR_LIST(struct ppcg_options, n_host_includes,
         host_includes, 0, "host-include-file", "filename",
-        "file to #include in generated kernel code")
+        "file to #include at the beginning of the host code")
+ISL_ARG_STR_LIST(struct ppcg_options, n_host_appends,
+        host_appends, 0, "host-append-file", "filename",
+        "file to #include at the end of the host code")
 ISL_ARG_STR_LIST(struct ppcg_options, n_kernel_includes,
         kernel_includes, 0, "kernel-include-file", "filename",
-        "file to #include in host code")
+        "file to #include in generated kernel code")
 ISL_ARGS_END

@@ -12,6 +12,6 @@ struct cuda_info {
 struct ppcg_options;
 
 void cuda_open_files(struct cuda_info *info, struct ppcg_options *options, const char *input, const char *output);
-void cuda_close_files(struct cuda_info *info);
+void cuda_close_files(struct cuda_info *info, struct ppcg_options *options);
 
 #endif

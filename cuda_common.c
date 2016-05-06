@@ -67,8 +67,16 @@ void cuda_open_files(struct cuda_info *info, struct ppcg_options *options, const
 
 /* Close all output files.
  */
-void cuda_close_files(struct cuda_info *info)
+void cuda_close_files(struct cuda_info *info, struct ppcg_options *options)
 {
+	int i;
+
+	if (options->n_host_appends)
+		fprintf(info->host_c, "\n");
+	for (i = 0; i < options->n_host_appends; ++i) {
+		fprintf(info->host_c, "#include <%s>\n", options->host_appends[i]);
+	}
+
     fprintf(info->kernel_h, "\n");
     fprintf(info->kernel_h, "#ifdef __cplusplus\n");
     fprintf(info->kernel_h, "} /* extern \"C\"*/\n");
