@@ -79,6 +79,7 @@ static int opencl_open_files(struct opencl_info *info)
 	char name[PATH_MAX];
 	int i;
 	int len;
+	FILE *fp;
 
 	if (info->output) {
 		const char *ext;
@@ -135,13 +136,12 @@ static int opencl_open_files(struct opencl_info *info)
 
 	for (i = 0; i < info->options->opencl_n_include_file; ++i) {
 		const char *filepath = info->options->opencl_include_files[i];
-		if (info->options->opencl_embed_kernel_code) {
-			FILE* fp = fopen(filepath, "r");
-			if (!fp) {
-				fprintf(stderr, "Failed to open \"%s\" for reading\n", filepath);
-				return -1;
-			}
+		fp = NULL;
 
+		if (info->options->opencl_embed_kernel_code)
+			fp = fopen(filepath, "r");
+
+		if (fp) {
 			fseek(fp, 0, SEEK_END);
 			long size = ftell(fp);
 			rewind(fp);
