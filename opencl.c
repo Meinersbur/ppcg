@@ -191,7 +191,7 @@ static void opencl_print_escaped(const char *str, const char *end, FILE *file)
 static void opencl_print_as_c_string(const char *str, FILE *file)
 {
 	const char *prev = str;
-
+	//TODO: Cope with CRLF-formatted files.
 	while ((str = strchr(prev, '\n'))) {
 		fprintf(file, "\n\"");
 		opencl_print_escaped(prev, str, file);
@@ -988,6 +988,9 @@ static struct ppcg_opencl_fn {
 
 	{ "ceil",	"ceil",		{ "double" } },
 	{ "ceilf",	"ceil",		{ "float" } },
+
+	{ "round",	"round",	{ "double" } },
+	{ "roundf",	"round",	{ "float" } },
 };
 
 #define ARRAY_SIZE(array) (sizeof(array)/sizeof(*array))

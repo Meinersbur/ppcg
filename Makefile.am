@@ -57,6 +57,9 @@ ppcg_SOURCES = \
 	util.h \
 	version.c
 
+include_HEADERS = \
+	ocl_utilities.h
+
 TESTS = @extra_tests@
 EXTRA_TESTS = opencl_test.sh polybench_test.sh
 TEST_EXTENSIONS = .sh
