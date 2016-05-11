@@ -60,6 +60,9 @@ ppcg_SOURCES = \
 include_HEADERS = \
 	ocl_utilities.h
 
+dist_pkgdata_DATA = \
+	ocl_utilities.c
+
 TESTS = @extra_tests@
 EXTRA_TESTS = opencl_test.sh polybench_test.sh
 TEST_EXTENSIONS = .sh
