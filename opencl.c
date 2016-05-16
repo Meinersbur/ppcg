@@ -1209,14 +1209,10 @@ static __isl_give isl_printer *opencl_print_total_number_of_work_items_for_dim(
 	if (i < min(grid_dim, block_dim)) {
 		grid_size_expr = kernel->grid_size_expr;
 		bound_grid = isl_ast_expr_get_op_arg(grid_size_expr, 1 + i);
-		if (kernel->options->target == PPCG_TARGET_OPENCL) {
 		p = isl_printer_print_str(p, "(");
 		p = isl_printer_print_ast_expr(p, bound_grid);
 		p = isl_printer_print_str(p, ") * ");
 		p = isl_printer_print_int(p, kernel->block_dim[i]);
-		} else {
-			p = isl_printer_print_ast_expr(p, bound_grid);
-		}
 		isl_ast_expr_free(bound_grid);
 	} else if (i >= grid_dim) {
 		p = isl_printer_print_int(p, kernel->block_dim[i]);
@@ -1465,11 +1461,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_indent(p, 2);
 
 	p = isl_printer_start_line(p);
-	if (data->opencl->options->target==PPCG_TARGET_OPENCL)
 	p = isl_printer_print_str(p, "size_t global_work_size[");
-	else
-		p = isl_printer_print_str(p, "size_t grid_size[");
-
 	if (kernel->n_block > 0)
 		p = isl_printer_print_int(p, kernel->n_block);
 	else
@@ -1550,7 +1542,7 @@ static __isl_give isl_printer *opencl_print_host_user(
 		p = isl_printer_start_line(p);
 		p = isl_printer_print_str(p, "prl_scop_call(__ppcg_scopinst, __ppcg_kernel");
 		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, ", sizeof(grid_size)/sizeof(grid_size[0]), grid_size,  sizeof(block_size)/sizeof(block_size[0]), block_size, sizeof(__ppcg_kernel");
+		p = isl_printer_print_str(p, ", sizeof(global_work_size)/sizeof(global_work_size[0]), global_work_size, sizeof(block_size)/sizeof(block_size[0]), block_size, sizeof(__ppcg_kernel");
 		p = isl_printer_print_int(p, kernel->id);
 		p = isl_printer_print_str(p, "_args)/sizeof(__ppcg_kernel");
 		p = isl_printer_print_int(p, kernel->id);
