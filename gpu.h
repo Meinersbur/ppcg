@@ -198,6 +198,8 @@ struct gpu_prog {
 	struct gpu_array_info *array;
 
 	int id;
+
+	int n_kernel;
 };
 
 struct gpu_gen {
@@ -376,6 +378,9 @@ struct ppcg_kernel {
 	struct gpu_prog *prog;
 
 	int id;
+
+	// Id within the parent gpu_prog.
+	int subid;
 
 	isl_id_list *block_ids;
 	isl_id_list *thread_ids;

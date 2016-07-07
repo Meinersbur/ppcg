@@ -328,7 +328,7 @@ __isl_give isl_printer *print_kernel_name(__isl_take isl_printer *p, struct ppcg
 
 	p = print_prog_name(p, prog);
 	p = isl_printer_print_str(p, "_kernel");
-	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_int(p, kernel->subid);
 
 	return p;
 }

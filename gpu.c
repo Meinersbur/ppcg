@@ -3946,6 +3946,7 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	kernel->n_block = n_outer_coincidence(node_thread);
 	isl_schedule_node_free(node_thread);
 	kernel->id = gen->kernel_id++;
+	kernel->subid = gen->prog->n_kernel++;
 	read_grid_and_block_sizes(kernel, gen);
 
 	kernel->sync_writes = compute_sync_writes(kernel, node);
@@ -5809,6 +5810,7 @@ struct gpu_prog *gpu_prog_alloc(isl_ctx *ctx, struct ppcg_scop *scop)
 	prog->to_inner = pet_scop_compute_outer_to_inner(scop->pet);
 	prog->to_outer = isl_union_map_copy(prog->to_inner);
 	prog->to_outer = isl_union_map_reverse(prog->to_outer);
+	prog->n_kernel = 0;
 
 	if (!prog->stmts)
 		return gpu_prog_free(prog);
