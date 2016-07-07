@@ -312,23 +312,31 @@ __isl_give isl_printer *gpu_print_types(__isl_take isl_printer *p,
 }
 
 static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_print_str(p, "__prog");
+	p = isl_printer_print_int(p, prog->id);
+
 	const char *funcname = pet_scop_get_function_name(prog->scop->pet);
 	if (funcname) {
-		p = isl_printer_print_str(p, "__ppcg_");
+		p = isl_printer_print_str(p, "_");
 		p = isl_printer_print_str(p, funcname);
-		p = isl_printer_print_str(p, "_prog");
-	} else
-		p = isl_printer_print_str(p, "__ppcg_prog");
-	p = isl_printer_print_int(p, prog->id);
+	}
+
 	return p;
 }
 
 __isl_give isl_printer *print_kernel_name(__isl_take isl_printer *p, struct ppcg_kernel *kernel) {
 	struct gpu_prog* prog = kernel->prog;
 
-	p = print_prog_name(p, prog);
-	p = isl_printer_print_str(p, "_kernel");
+	p = isl_printer_print_str(p, "__kernel");
+	p = isl_printer_print_int(p, prog->id);
+	p = isl_printer_print_str(p, "_");
 	p = isl_printer_print_int(p, kernel->subid);
+
+	const char *funcname = pet_scop_get_function_name(prog->scop->pet);
+	if (funcname) {
+		p = isl_printer_print_str(p, "_");
+		p = isl_printer_print_str(p, funcname);
+	}
 
 	return p;
 }
