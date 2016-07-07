@@ -323,6 +323,16 @@ static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct
 	return p;
 }
 
+__isl_give isl_printer *print_kernel_name(__isl_take isl_printer *p, struct ppcg_kernel *kernel) {
+	struct gpu_prog* prog = kernel->prog;
+
+	p = print_prog_name(p, prog);
+	p = isl_printer_print_str(p, "_kernel");
+	p = isl_printer_print_int(p, kernel->id);
+
+	return p;
+}
+
 static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struct gpu_prog *prog,  __isl_give isl_printer *(*callback)(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, isl_id *param, struct gpu_array_info *array,  void *user), void *user) {
 	int i;
 	bool firstarg = true;
@@ -348,7 +358,7 @@ static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struc
 		if (gpu_array_is_read_only_scalar(array) && (isl_set_find_dim_by_name(prog->context, isl_dim_param, array->name)>=0))
 			continue; // Already declared as parameter
 		//assert((gpu_array_is_read_only_scalar(array) || gpu_array_requires_device_allocation(array)) && "non-device allocated written scalar might be miscompiled (need to pass by pointer)");
-		assert(array->linearize && "TODO: Implement passing arrays of fixed size as arrays (Compatiable with C and C++)");
+		assert(array->linearize && "TODO: Implement passing arrays of fixed size as arrays (Compatible with C and C++)");
 
 		p = (*callback)(p, prog, firstarg, NULL, array, user);
 		firstarg = false;

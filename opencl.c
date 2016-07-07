@@ -589,14 +589,14 @@ static __isl_give isl_printer *opencl_release_cl_objects(
  * only scalar.
  */
 static __isl_give isl_printer *opencl_set_kernel_argument(
-	__isl_take isl_printer *p, int kernel_id,
+	__isl_take isl_printer *p, struct ppcg_kernel *kernel,
 	const char *arg_name, int arg_index, int read_only_scalar, struct opencl_info *opencl)
 {
 	if (opencl->options->target == PPCG_TARGET_OPENCL) {
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p,
-		"openclCheckReturn(clSetKernelArg(kernel");
-	p = isl_printer_print_int(p, kernel_id);
+		"openclCheckReturn(clSetKernelArg(");
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, ", ");
 	p = isl_printer_print_int(p, arg_index);
 	p = isl_printer_print_str(p, ", sizeof(");
@@ -663,8 +663,8 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 
 	if (opencl->options->target==PPCG_TARGET_PRL) {
 		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "struct prl_kernel_call_arg __ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
+		p = isl_printer_print_str(p, "struct prl_kernel_call_arg ");
+		p = print_kernel_name(p, kernel);
 		p = isl_printer_print_str(p, "_args[] = {");
 		p = isl_printer_end_line(p);
 		p = isl_printer_indent(p, 2);
@@ -679,7 +679,7 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 		if (!required)
 			continue;
 		ro = gpu_array_is_read_only_scalar(&prog->array[i]);
-		opencl_set_kernel_argument(p, kernel->id, prog->array[i].name,
+		opencl_set_kernel_argument(p, kernel, prog->array[i].name,
 			arg_index, ro, opencl);
 		arg_index++;
 	}
@@ -690,7 +690,7 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 		const char *name;
 
 		name = isl_space_get_dim_name(space, isl_dim_param, i);
-		opencl_set_kernel_argument(p, kernel->id, name, arg_index, 1, opencl);
+		opencl_set_kernel_argument(p, kernel, name, arg_index, 1, opencl);
 		arg_index++;
 	}
 	isl_space_free(space);
@@ -700,7 +700,7 @@ static __isl_give isl_printer *opencl_set_kernel_arguments(
 		const char *name;
 
 		name = isl_space_get_dim_name(kernel->space, isl_dim_set, i);
-		opencl_set_kernel_argument(p, kernel->id, name, arg_index, 1, opencl);
+		opencl_set_kernel_argument(p, kernel, name, arg_index, 1, opencl);
 		arg_index++;
 	}
 
@@ -798,8 +798,8 @@ static __isl_give isl_printer *opencl_print_kernel_header(
 	struct ppcg_kernel *kernel)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "__kernel void kernel");
-	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, "__kernel void ");
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, "(");
 	p = opencl_print_kernel_arguments(p, prog, kernel, 1);
 	p = isl_printer_print_str(p, ")");
@@ -1487,10 +1487,10 @@ static __isl_give isl_printer *opencl_print_host_user(
 
 	if (data->opencl->options->target==PPCG_TARGET_OPENCL) {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "cl_kernel kernel");
-	p = isl_printer_print_int(p, kernel->id);
-	p = isl_printer_print_str(p, " = clCreateKernel(program, \"kernel");
-	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, "cl_kernel ");
+	p = print_kernel_name(p, kernel);
+	p = isl_printer_print_str(p, " = clCreateKernel(program, \"");
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, "\", &err);");
 	p = isl_printer_end_line(p);
 	p = isl_printer_start_line(p);
@@ -1501,8 +1501,8 @@ static __isl_give isl_printer *opencl_print_host_user(
 
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "openclCheckReturn(clEnqueueNDRangeKernel"
-		"(queue, kernel");
-	p = isl_printer_print_int(p, kernel->id);
+		"(queue, ");
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, ", ");
 	if (kernel->n_block > 0)
 		p = isl_printer_print_int(p, kernel->n_block);
@@ -1515,8 +1515,8 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_end_line(p);
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "openclCheckReturn("
-					"clReleaseKernel(kernel");
-	p = isl_printer_print_int(p, kernel->id);
+					"clReleaseKernel(");
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, "));");
 	p = isl_printer_end_line(p);
 	p = isl_printer_start_line(p);
@@ -1524,30 +1524,30 @@ static __isl_give isl_printer *opencl_print_host_user(
 	p = isl_printer_end_line(p);
 	} else {
 		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "static prl_kernel __ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
+		p = isl_printer_print_str(p, "static prl_kernel ");
+		p = print_kernel_name(p, kernel);
 		p = isl_printer_print_str(p, ";");
 		p = isl_printer_end_line(p);
 
 		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "prl_scop_init_kernel(__ppcg_scopinst, &__ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, ", __ppcg_program, \"kernel");
-		p = isl_printer_print_int(p, kernel->id);
+		p = isl_printer_print_str(p, "prl_scop_init_kernel(__ppcg_scopinst, &");
+		p = print_kernel_name(p, kernel);
+		p = isl_printer_print_str(p, ", __ppcg_program, \"");
+		p = print_kernel_name(p, kernel);
 		p = isl_printer_print_str(p, "\");");
 		p = isl_printer_end_line(p);
 
 		opencl_set_kernel_arguments(p, data->prog, kernel, data->opencl);
 
 		p = isl_printer_start_line(p);
-		p = isl_printer_print_str(p, "prl_scop_call(__ppcg_scopinst, __ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, ", sizeof(global_work_size)/sizeof(global_work_size[0]), global_work_size, sizeof(block_size)/sizeof(block_size[0]), block_size, sizeof(__ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, "_args)/sizeof(__ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
-		p = isl_printer_print_str(p, "_args[0]), __ppcg_kernel");
-		p = isl_printer_print_int(p, kernel->id);
+		p = isl_printer_print_str(p, "prl_scop_call(__ppcg_scopinst, ");
+		p = print_kernel_name(p, kernel);
+		p = isl_printer_print_str(p, ", sizeof(global_work_size)/sizeof(global_work_size[0]), global_work_size, sizeof(block_size)/sizeof(block_size[0]), block_size, sizeof(");
+		p = print_kernel_name(p, kernel);
+		p = isl_printer_print_str(p, "_args)/sizeof(");
+		p = print_kernel_name(p, kernel);
+		p = isl_printer_print_str(p, "_args[0]), ");
+		p = print_kernel_name(p, kernel);
 		p = isl_printer_print_str(p, "_args);");
 		p = isl_printer_end_line(p);
 	}
