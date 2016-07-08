@@ -1441,18 +1441,13 @@ static __isl_give isl_printer *opencl_print_host_user(
 	isl_id_free(id);
 
 	if (is_user) {
-		if (data->opencl->options->target==PPCG_TARGET_OPENCL) {
-		return ppcg_kernel_print_domain(p, stmt);
-		} else {
-			p = isl_printer_print_str(p, "{ if (prl_mem_is_available_on_host(__ppcg_scopinst)) {");
-			p = ppcg_kernel_print_domain(p, stmt);
-			p = isl_printer_print_str(p, "} else {");
-
-			data->opencl->kprinter = print_opencl_kernel_domain(data->opencl->kprinter, stmt);
-			//data->opencl->kprinter = opencl_print_kernel(data->prog, , data->opencl->kprinter);
-			p = isl_printer_print_str(p, "}}");
-			return p;
+		if (data->opencl->options->target==PPCG_TARGET_PRL) {
+			fprintf(stderr, "Required to execute parts on the host, which is currently not supported.\n");
+			fprintf(stderr, "PRL might store any data on the device only.\n");
+			abort();
 		}
+
+		return ppcg_kernel_print_domain(p, stmt);
 	}
 
 	p = isl_printer_start_line(p);
