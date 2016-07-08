@@ -5653,7 +5653,7 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	struct gpu_prog *prog;
 	isl_ctx *ctx;
 	isl_schedule *schedule;
-	int any_permutable;
+	int any_permutable = 1;
 
 	if (!scop)
 		return isl_printer_free(p);
@@ -5668,7 +5668,9 @@ static __isl_give isl_printer *generate(__isl_take isl_printer *p,
 	gen->prog = prog;
 	schedule = get_schedule(gen);
 
-	any_permutable = has_any_permutable_node(schedule);
+	if ((options->target_fallback == PPCG_FALLBACK_ALLOW) || (options->target_fallback == PPCG_FALLBACK_AUTO && options->target != PPCG_TARGET_PRL))
+		any_permutable = has_any_permutable_node(schedule);
+
 	if (any_permutable < 0 || !any_permutable) {
 		if (any_permutable < 0)
 			p = isl_printer_free(p);

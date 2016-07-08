@@ -82,6 +82,9 @@ struct ppcg_options {
 
 	int n_kernel_includes;
 	const char **kernel_includes;
+
+	/* If disabled, exit with error when selected target could not be generated for all scops. */
+	unsigned target_fallback;
 };
 
 ISL_ARG_DECL(ppcg_debug_options, struct ppcg_debug_options,
@@ -92,6 +95,11 @@ ISL_ARG_DECL(ppcg_options, struct ppcg_options, ppcg_options_args)
 #define		PPCG_TARGET_CUDA	1
 #define		PPCG_TARGET_OPENCL      2
 #define		PPCG_TARGET_PRL         3
+
+#define PPCG_FALLBACK_AUTO 0
+#define PPCG_FALLBACK_ALLOW 1
+#define PPCG_FALLBACK_AVOID 2
+#define PPCG_FALLBACK_ERROR 3
 
 void ppcg_options_set_target_defaults(struct ppcg_options *options);
 

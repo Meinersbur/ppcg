@@ -965,6 +965,11 @@ static __isl_give isl_printer *transform(__isl_take isl_printer *p,
 	struct ppcg_scop *ps;
 
 	if (print_original(scop, data->options)) {
+		if (data->options->target_fallback==PPCG_FALLBACK_ERROR) {
+			fprintf(stderr, "Cannot handle scop, but fallback has been disabled\n");
+			abort();
+		}
+
 		p = pet_scop_print_original(scop, p);
 		pet_scop_free(scop);
 		return p;

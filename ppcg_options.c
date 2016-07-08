@@ -18,6 +18,14 @@ static struct isl_arg_choice target[] = {
 	{0}
 };
 
+static struct isl_arg_choice fallback[] = {
+	{"auto",	PPCG_FALLBACK_AUTO},
+	{"allow",	PPCG_FALLBACK_ALLOW},
+	{"avoid",	PPCG_FALLBACK_AVOID},
+	{"error", 	PPCG_FALLBACK_ERROR},
+	{0}
+};
+
 /* Set defaults that depend on the target.
  * In particular, set --schedule-outer-coincidence iff target is a GPU.
  */
@@ -109,6 +117,7 @@ ISL_ARG_BOOL(struct ppcg_options, openmp, 0, "openmp", 0,
 ISL_ARG_USER_OPT_CHOICE(struct ppcg_options, target, 0, "target", target,
 	&set_target, PPCG_TARGET_CUDA, PPCG_TARGET_CUDA,
 	"the target to generate code for")
+ISL_ARG_USER_OPT_CHOICE(struct ppcg_options, target_fallback, 0, "target-fallback", fallback, 0, PPCG_FALLBACK_AUTO, PPCG_FALLBACK_ALLOW, "Allow fallback to CPU")
 // ISL_ARG_BOOL(struct ppcg_options, linearize_device_arrays, 0,
 //	"linearize-device-arrays", 1,
 //	"linearize all device arrays, even those of fixed size")
