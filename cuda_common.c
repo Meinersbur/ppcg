@@ -18,33 +18,71 @@
 /* Open the host .cu file and the kernel .hu and .cu files for writing.
  * Add the necessary includes.
  */
-void cuda_open_files(struct cuda_info *info, const char *input)
+void cuda_open_files(struct cuda_info *info, struct ppcg_options *options, const char *input, const char *output)
 {
     char name[PATH_MAX];
-    int len;
+    int len, i;
 
-    len = ppcg_extract_base_name(name, input);
+	if (output) {
+		const char *ext;
 
-    strcpy(name + len, "_host.cu");
-    info->host_c = fopen(name, "w");
+		ext = strrchr(output, '.');
+		len = ext ? ext - output : strlen(output);
+		memcpy(name, output, len);
+
+		info->host_c = fopen(output, "w");
+	} else {
+		len = ppcg_extract_base_name(name, input);
+
+		strcpy(name + len, "_host.c");
+		info->host_c = fopen(name, "w");
+	}
 
     strcpy(name + len, "_kernel.cu");
-    info->kernel_c = fopen(name, "w");
+    info->kernel_cu = fopen(name, "w");
 
-    strcpy(name + len, "_kernel.hu");
+    strcpy(name + len, "_kernel.h");
     info->kernel_h = fopen(name, "w");
-    fprintf(info->host_c, "#include <assert.h>\n");
-    fprintf(info->host_c, "#include <stdio.h>\n");
-    fprintf(info->host_c, "#include \"%s\"\n", name);
-    fprintf(info->kernel_c, "#include \"%s\"\n", name);
-    fprintf(info->kernel_h, "#include \"cuda.h\"\n\n");
+
+	fprintf(info->host_c, "\n");
+	fprintf(info->host_c, "#include \"%s\"\n\n", name);
+
+	//fprintf(info->kernel_cu, "#include <pencil_kernel_cu.h>\n");
+	fprintf(info->kernel_cu, "#include <stdio.h>\n"); // fprintf, fflush
+	fprintf(info->kernel_cu, "#include <assert.h>\n"); // assert
+
+	for (i = 0; i < options->n_host_includes; ++i) {
+		fprintf(info->host_c, "#include <%s>\n", options->host_includes[i]);
+	}
+
+	for (i = 0; i < options->n_kernel_includes; ++i) {
+		fprintf(info->kernel_cu, "#include <%s>\n", options->kernel_includes[i]);
+	}
+
+	//TODO: Header guard
+    fprintf(info->kernel_h, "#ifdef __cplusplus\n");
+    fprintf(info->kernel_h, "extern \"C\" {\n");
+    fprintf(info->kernel_h, "#endif\n");
 }
 
 /* Close all output files.
  */
-void cuda_close_files(struct cuda_info *info)
+void cuda_close_files(struct cuda_info *info, struct ppcg_options *options)
 {
-    fclose(info->kernel_c);
+	int i;
+
+	if (options->n_host_appends)
+		fprintf(info->host_c, "\n");
+	for (i = 0; i < options->n_host_appends; ++i) {
+		fprintf(info->host_c, "#include <%s>\n", options->host_appends[i]);
+	}
+
+    fprintf(info->kernel_h, "\n");
+    fprintf(info->kernel_h, "#ifdef __cplusplus\n");
+    fprintf(info->kernel_h, "} /* extern \"C\"*/\n");
+    fprintf(info->kernel_h, "#endif\n");
+
+    fclose(info->kernel_cu);
     fclose(info->kernel_h);
     fclose(info->host_c);
 }

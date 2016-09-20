@@ -14,6 +14,15 @@ static struct isl_arg_choice target[] = {
 	{"c",		PPCG_TARGET_C},
 	{"cuda",	PPCG_TARGET_CUDA},
 	{"opencl",      PPCG_TARGET_OPENCL},
+	{"prl",         PPCG_TARGET_PRL},
+	{0}
+};
+
+static struct isl_arg_choice fallback[] = {
+	{"auto",	PPCG_FALLBACK_AUTO},
+	{"allow",	PPCG_FALLBACK_ALLOW},
+	{"avoid",	PPCG_FALLBACK_AVOID},
+	{"error", 	PPCG_FALLBACK_ERROR},
 	{0}
 };
 
@@ -110,9 +119,10 @@ ISL_ARG_BOOL(struct ppcg_options, openmp, 0, "openmp", 0,
 ISL_ARG_USER_OPT_CHOICE(struct ppcg_options, target, 0, "target", target,
 	&set_target, PPCG_TARGET_CUDA, PPCG_TARGET_CUDA,
 	"the target to generate code for")
-ISL_ARG_BOOL(struct ppcg_options, linearize_device_arrays, 0,
-	"linearize-device-arrays", 1,
-	"linearize all device arrays, even those of fixed size")
+ISL_ARG_USER_OPT_CHOICE(struct ppcg_options, target_fallback, 0, "target-fallback", fallback, 0, PPCG_FALLBACK_AUTO, PPCG_FALLBACK_ALLOW, "Allow fallback to CPU")
+// ISL_ARG_BOOL(struct ppcg_options, linearize_device_arrays, 0,
+//	"linearize-device-arrays", 1,
+//	"linearize all device arrays, even those of fixed size")
 ISL_ARG_BOOL(struct ppcg_options, allow_gnu_extensions, 0,
 	"allow-gnu-extensions", 1,
 	"allow the use of GNU extensions in generated code")
@@ -133,4 +143,13 @@ ISL_ARG_STR(struct ppcg_options, save_schedule_file, 0, "save-schedule",
 ISL_ARG_STR(struct ppcg_options, load_schedule_file, 0, "load-schedule",
 	"file", NULL, "load schedule from <file>, "
 	"using it instead of an isl computed schedule")
+ISL_ARG_STR_LIST(struct ppcg_options, n_host_includes,
+        host_includes, 0, "host-include-file", "filename",
+        "file to #include at the beginning of the host code")
+ISL_ARG_STR_LIST(struct ppcg_options, n_host_appends,
+        host_appends, 0, "host-append-file", "filename",
+        "file to #include at the end of the host code")
+ISL_ARG_STR_LIST(struct ppcg_options, n_kernel_includes,
+        kernel_includes, 0, "kernel-include-file", "filename",
+        "file to #include in generated kernel code")
 ISL_ARGS_END

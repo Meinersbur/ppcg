@@ -52,7 +52,7 @@ struct ppcg_options {
 	int openmp;
 
 	/* Linearize all device arrays. */
-	int linearize_device_arrays;
+	//int linearize_device_arrays;
 
 	/* Allow the use of GNU extensions in generated code. */
 	int allow_gnu_extensions;
@@ -85,6 +85,17 @@ struct ppcg_options {
 	char *save_schedule_file;
 	/* Name of file for loading schedule or NULL. */
 	char *load_schedule_file;
+
+	int n_host_includes;
+	const char **host_includes;
+	int n_host_appends;
+	const char **host_appends;
+
+	int n_kernel_includes;
+	const char **kernel_includes;
+
+	/* If disabled, exit with error when selected target could not be generated for all scops. */
+	unsigned target_fallback;
 };
 
 ISL_ARG_DECL(ppcg_debug_options, struct ppcg_debug_options,
@@ -94,6 +105,12 @@ ISL_ARG_DECL(ppcg_options, struct ppcg_options, ppcg_options_args)
 #define		PPCG_TARGET_C		0
 #define		PPCG_TARGET_CUDA	1
 #define		PPCG_TARGET_OPENCL      2
+#define		PPCG_TARGET_PRL         3
+
+#define PPCG_FALLBACK_AUTO 0
+#define PPCG_FALLBACK_ALLOW 1
+#define PPCG_FALLBACK_AVOID 2
+#define PPCG_FALLBACK_ERROR 3
 
 void ppcg_options_set_target_defaults(struct ppcg_options *options);
 

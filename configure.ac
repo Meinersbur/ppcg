@@ -1,4 +1,4 @@
-AC_INIT([ppcg], [0.06], [isl-development@googlegroups.com])
+AC_INIT([ppcg], [0.06], [isl@meinersbur.de])
 AC_CONFIG_AUX_DIR([.])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign])
@@ -13,6 +13,12 @@ AX_CHECK_OPENCL
 if test $HAVE_OPENCL = yes; then
 	extra_tests="$extra_tests opencl_test.sh"
 fi
+
+dnl Get absolute paths
+abs_builddir=`pwd` # ${ac_abs_builddir}
+abs_srcdir=$(readlink -m "${srcdir}")
+AC_SUBST(abs_builddir)
+AC_SUBST(abs_srcdir)
 
 AX_SUBMODULE(isl,build|bundled|system,bundled)
 AM_CONDITIONAL(BUNDLED_ISL, test $with_isl = bundled)

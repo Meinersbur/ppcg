@@ -2,7 +2,12 @@ AC_DEFUN([AX_DETECT_GIT_HEAD], [
 	AC_SUBST(GIT_HEAD_ID)
 	AC_SUBST(GIT_HEAD)
 	AC_SUBST(GIT_HEAD_VERSION)
-	if test -f $srcdir/.git/HEAD; then
+	if test -f $srcdir/.git; then
+		gitdir=`GIT_DIR=$srcdir/.git git rev-parse --git-dir`
+		GIT_HEAD="$gitdir/index"
+		GIT_REPO="$gitdir"
+		GIT_HEAD_ID=`GIT_DIR=$GIT_REPO git describe --always`
+	elif test -f $srcdir/.git/HEAD; then
 		GIT_HEAD="$srcdir/.git/index"
 		GIT_REPO="$srcdir/.git"
 		GIT_HEAD_ID=`GIT_DIR=$GIT_REPO git describe --always`
@@ -22,6 +27,6 @@ AC_DEFUN([AX_DETECT_GIT_HEAD], [
 	if test -z "$GIT_REPO" ; then
 		GIT_HEAD_VERSION="$GIT_HEAD_ID"
 	else
-		GIT_HEAD_VERSION="\`GIT_DIR=$GIT_REPO git describe --always\`"
+	    GIT_HEAD_VERSION="\`GIT_DIR=$GIT_REPO git describe --always\`"
 	fi
 ])

@@ -9,6 +9,7 @@
 
 #include <isl/aff.h>
 #include <isl/ast.h>
+#include <stdbool.h>
 
 #include "cuda_common.h"
 #include "cuda.h"
@@ -143,7 +144,7 @@ static __isl_give isl_printer *copy_array_to_device(__isl_take isl_printer *p,
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", ");
 
-	if (gpu_array_is_scalar(array))
+	if (gpu_array_is_read_only_scalar(array))
 		p = isl_printer_print_str(p, "&");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", ");
@@ -165,7 +166,7 @@ static __isl_give isl_printer *copy_array_from_device(
 {
 	p = isl_printer_start_line(p);
 	p = isl_printer_print_str(p, "cudaCheckReturn(cudaMemcpy(");
-	if (gpu_array_is_scalar(array))
+	if (gpu_array_is_read_only_scalar(array))
 		p = isl_printer_print_str(p, "&");
 	p = isl_printer_print_str(p, array->name);
 	p = isl_printer_print_str(p, ", dev_");
@@ -178,20 +179,21 @@ static __isl_give isl_printer *copy_array_from_device(
 	return p;
 }
 
-static void print_reverse_list(FILE *out, int len, int *list)
+static __isl_give isl_printer* print_reverse_list(__isl_take isl_printer *p, int len, int *list)
 {
 	int i;
 
-	if (!out || len == 0)
-		return;
+        if (!p || len == 0)
+		return p;
 
-	fprintf(out, "(");
+	p = isl_printer_print_str(p,"(");
 	for (i = 0; i < len; ++i) {
 		if (i)
-			fprintf(out, ", ");
-		fprintf(out, "%d", list[len - 1 - i]);
+			p = isl_printer_print_str(p, ", ");
+		p = isl_printer_print_int(p, list[len - 1 - i]);
 	}
-	fprintf(out, ")");
+	p = isl_printer_print_str(p,")");
+	return p;
 }
 
 /* Print the effective grid size as a list of the sizes in each
@@ -322,8 +324,8 @@ static __isl_give isl_printer *print_kernel_header(__isl_take isl_printer *p,
 	struct gpu_prog *prog, struct ppcg_kernel *kernel)
 {
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "__global__ void kernel");
-	p = isl_printer_print_int(p, kernel->id);
+	p = isl_printer_print_str(p, "__global__ void ");
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, "(");
 	p = print_kernel_arguments(p, prog, kernel, 1);
 	p = isl_printer_print_str(p, ")");
@@ -332,21 +334,14 @@ static __isl_give isl_printer *print_kernel_header(__isl_take isl_printer *p,
 }
 
 /* Print the header of the given kernel to both gen->cuda.kernel_h
- * and gen->cuda.kernel_c.
+ * and gen->cuda.kernel_cu.
  */
 static void print_kernel_headers(struct gpu_prog *prog,
 	struct ppcg_kernel *kernel, struct cuda_info *cuda)
 {
 	isl_printer *p;
 
-	p = isl_printer_to_file(prog->ctx, cuda->kernel_h);
-	p = isl_printer_set_output_format(p, ISL_FORMAT_C);
-	p = print_kernel_header(p, prog, kernel);
-	p = isl_printer_print_str(p, ";");
-	p = isl_printer_end_line(p);
-	isl_printer_free(p);
-
-	p = isl_printer_to_file(prog->ctx, cuda->kernel_c);
+	p = isl_printer_to_file(prog->ctx, cuda->kernel_cu);
 	p = isl_printer_set_output_format(p, ISL_FORMAT_C);
 	p = print_kernel_header(p, prog, kernel);
 	p = isl_printer_end_line(p);
@@ -485,10 +480,10 @@ static void print_kernel(struct gpu_prog *prog, struct ppcg_kernel *kernel,
 	isl_printer *p;
 
 	print_kernel_headers(prog, kernel, cuda);
-	fprintf(cuda->kernel_c, "{\n");
-	print_kernel_iterators(cuda->kernel_c, kernel);
+	fprintf(cuda->kernel_cu, "{\n");
+	print_kernel_iterators(cuda->kernel_cu, kernel);
 
-	p = isl_printer_to_file(ctx, cuda->kernel_c);
+	p = isl_printer_to_file(ctx, cuda->kernel_cu);
 	p = isl_printer_set_output_format(p, ISL_FORMAT_C);
 	p = isl_printer_indent(p, 4);
 
@@ -503,7 +498,7 @@ static void print_kernel(struct gpu_prog *prog, struct ppcg_kernel *kernel,
 	p = isl_ast_node_print(kernel->tree, p, print_options);
 	isl_printer_free(p);
 
-	fprintf(cuda->kernel_c, "}\n");
+	fprintf(cuda->kernel_cu, "}\n");
 }
 
 /* Print code for initializing the device for execution of the transformed
@@ -627,16 +622,14 @@ static __isl_give isl_printer *print_host_user(__isl_take isl_printer *p,
 	p = isl_printer_print_str(p, "dim3 k");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, "_dimBlock");
-	print_reverse_list(isl_printer_get_file(p),
-				kernel->n_block, kernel->block_dim);
+	p = print_reverse_list(p, kernel->n_block, kernel->block_dim);
 	p = isl_printer_print_str(p, ";");
 	p = isl_printer_end_line(p);
 
 	p = print_grid(p, kernel);
 
 	p = isl_printer_start_line(p);
-	p = isl_printer_print_str(p, "kernel");
-	p = isl_printer_print_int(p, kernel->id);
+	p = print_kernel_name(p, kernel);
 	p = isl_printer_print_str(p, " <<<k");
 	p = isl_printer_print_int(p, kernel->id);
 	p = isl_printer_print_str(p, "_dimGrid, k");
@@ -688,9 +681,9 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	struct gpu_types *types, void *user)
 {
 	struct cuda_info *cuda = user;
-	isl_printer *kernel;
+	isl_printer *kernel, *header;
 
-	kernel = isl_printer_to_file(isl_printer_get_ctx(p), cuda->kernel_c);
+	kernel = isl_printer_to_file(isl_printer_get_ctx(p), cuda->kernel_cu);
 	kernel = isl_printer_set_output_format(kernel, ISL_FORMAT_C);
 	kernel = gpu_print_types(kernel, types, prog);
 	isl_printer_free(kernel);
@@ -698,7 +691,43 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
 	if (!kernel)
 		return isl_printer_free(p);
 
-	p = print_host_code(p, prog, tree, cuda);
+	header = isl_printer_to_file(isl_printer_get_ctx(p), cuda->kernel_h);
+	header = isl_printer_set_output_format(header, ISL_FORMAT_C);
+
+	// Print function declaration into _kernel.h
+	header = isl_printer_start_line(header);
+	header = gpu_print_prog_declaration(header, prog, /*has_custom_types=*/isl_bool_false);
+	header = isl_printer_print_str(header, ";");
+	header = isl_printer_end_line(header);
+
+	isl_printer_free(header);
+
+	// Print function call into _host.c
+	p = gpu_print_prog_invocation(p, prog);
+
+
+	// Not printing directly to cuda->kernel_cu because kernel generation would interleave it.
+	isl_printer *code = isl_printer_to_str(isl_printer_get_ctx(p));
+	code = isl_printer_set_output_format(code, ISL_FORMAT_C);
+	code = ppcg_set_macro_names(code);
+
+	// Print generated code into _kernel.cu
+	code = isl_printer_print_str(code, "\n");
+	code = isl_printer_start_line(code);
+	code = isl_printer_print_str(code, "extern \"C\" ");
+	code = gpu_print_prog_declaration(code, prog, /*has_custom_types=*/isl_bool_true);
+	code = isl_printer_end_line(code);
+
+	code = ppcg_start_block(code);
+	code = isl_ast_op_type_print_macro(isl_ast_op_fdiv_q, code);
+	code = print_host_code(code, prog, tree, cuda);
+	code = ppcg_end_block(code);
+
+	char *codestr = isl_printer_get_str(code);
+	isl_printer_free(code);
+
+	fputs(codestr, cuda->kernel_cu);
+	free(codestr);
 
 	return p;
 }
@@ -714,16 +743,16 @@ static __isl_give isl_printer *print_cuda(__isl_take isl_printer *p,
  * and we close them after generate_gpu has finished.
  */
 int generate_cuda(isl_ctx *ctx, struct ppcg_options *options,
-	const char *input)
+	const char *input, const char *output)
 {
 	struct cuda_info cuda;
 	int r;
 
-	cuda_open_files(&cuda, input);
+	cuda_open_files(&cuda, options, input, output);
 
 	r = generate_gpu(ctx, input, cuda.host_c, options, &print_cuda, &cuda);
 
-	cuda_close_files(&cuda);
+	cuda_close_files(&cuda, options);
 
 	return r;
 }

@@ -45,7 +45,7 @@ ISL_ARGS_START(struct options, options_args)
 ISL_ARG_CHILD(struct options, pet, "pet", &pet_options_args, "pet options")
 ISL_ARG_CHILD(struct options, ppcg, NULL, &ppcg_options_args, "ppcg options")
 ISL_ARG_STR(struct options, output, 'o', NULL,
-	"filename", NULL, "output filename (c and opencl targets)")
+	"filename", NULL, "output filename")
 ISL_ARG_ARG(struct options, input, "input", NULL)
 ISL_ARG_VERSION(print_version)
 ISL_ARGS_END
@@ -965,6 +965,11 @@ static __isl_give isl_printer *transform(__isl_take isl_printer *p,
 	struct ppcg_scop *ps;
 
 	if (print_original(scop, data->options)) {
+		if (data->options->target_fallback==PPCG_FALLBACK_ERROR) {
+			fprintf(stderr, "Cannot handle scop, but fallback has been disabled\n");
+			abort();
+		}
+
 		p = pet_scop_print_original(scop, p);
 		pet_scop_free(scop);
 		return p;
@@ -1040,8 +1045,8 @@ int main(int argc, char **argv)
 	if (check_options(ctx) < 0)
 		r = EXIT_FAILURE;
 	else if (options->ppcg->target == PPCG_TARGET_CUDA)
-		r = generate_cuda(ctx, options->ppcg, options->input);
-	else if (options->ppcg->target == PPCG_TARGET_OPENCL)
+		r = generate_cuda(ctx, options->ppcg, options->input, options->output);
+	else if (options->ppcg->target == PPCG_TARGET_OPENCL || options->ppcg->target == PPCG_TARGET_PRL)
 		r = generate_opencl(ctx, options->ppcg, options->input,
 				options->output);
 	else

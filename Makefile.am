@@ -8,7 +8,7 @@ if BUNDLED_PET
     PET_LA = $(top_builddir)/pet/libpet.la
 endif
 
-SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET) .
+SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET)
 
 FORCE:
 isl/libisl.la: FORCE
@@ -61,14 +61,24 @@ ppcg_SOURCES = \
 	util.h \
 	version.c
 
+include_HEADERS = \
+	ocl_utilities.h
+
+dist_pkgdata_DATA = \
+	ocl_utilities.c
+
 TESTS = @extra_tests@
 EXTRA_TESTS = opencl_test.sh polybench_test.sh
 TEST_EXTENSIONS = .sh
 
 EXTRA_DIST = \
+	autogen.sh \
 	ocl_utilities.c \
 	ocl_utilities.h \
-	tests
+	tests \
+	examples/chemv.c
+
+CLEANFILES = gitversion.h
 
 dist-hook:
 	echo @GIT_HEAD_VERSION@ > $(distdir)/GIT_HEAD_ID

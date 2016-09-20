@@ -196,6 +196,10 @@ struct gpu_prog {
 
 	int n_array;
 	struct gpu_array_info *array;
+
+	int id;
+
+	int n_kernel;
 };
 
 struct gpu_gen {
@@ -223,6 +227,9 @@ struct gpu_gen {
 
 	/* Identifier of the next kernel. */
 	int kernel_id;
+
+	/* Identifier of the next prog. */
+	int prog_id;
 };
 
 enum ppcg_group_access_type {
@@ -371,6 +378,9 @@ struct ppcg_kernel {
 	struct gpu_prog *prog;
 
 	int id;
+
+	// Id within the parent gpu_prog.
+	int subid;
 
 	isl_id_list *block_ids;
 	isl_id_list *thread_ids;

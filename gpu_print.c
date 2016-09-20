@@ -8,6 +8,8 @@
  */
 
 #include <string.h>
+#include <stdbool.h>
+#include <assert.h>
 
 #include <isl/aff.h>
 
@@ -308,3 +310,142 @@ __isl_give isl_printer *gpu_print_types(__isl_take isl_printer *p,
 
 	return p;
 }
+
+static __isl_give isl_printer *print_prog_name(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_print_str(p, "__prog");
+	p = isl_printer_print_int(p, prog->id);
+
+	const char *funcname = pet_scop_get_function_name(prog->scop->pet);
+	if (funcname) {
+		p = isl_printer_print_str(p, "_");
+		p = isl_printer_print_str(p, funcname);
+	}
+
+	return p;
+}
+
+__isl_give isl_printer *print_kernel_name(__isl_take isl_printer *p, struct ppcg_kernel *kernel) {
+	struct gpu_prog* prog = kernel->prog;
+
+	p = isl_printer_print_str(p, "__kernel");
+	p = isl_printer_print_int(p, prog->id);
+	p = isl_printer_print_str(p, "_");
+	p = isl_printer_print_int(p, kernel->subid);
+
+	const char *funcname = pet_scop_get_function_name(prog->scop->pet);
+	if (funcname) {
+		p = isl_printer_print_str(p, "_");
+		p = isl_printer_print_str(p, funcname);
+	}
+
+	return p;
+}
+
+static __isl_give isl_printer* foreach_prog_arg(__isl_take isl_printer *p, struct gpu_prog *prog,  __isl_give isl_printer *(*callback)(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, isl_id *param, struct gpu_array_info *array,  void *user), void *user) {
+	int i;
+	bool firstarg = true;
+
+	// Parameter arguments
+	int n_params = isl_set_n_param(prog->context);
+	for (i = 0; i < n_params; ++i) {
+		isl_id *id = isl_set_get_dim_id(prog->context, isl_dim_param, i);
+		p = (*callback)(p, prog, firstarg, id, NULL, user);
+		isl_id_free(id);
+		firstarg = false;
+	}
+
+	// Array arguments
+	for (i = 0; i < prog->n_array; ++i) {
+		struct gpu_array_info *array = &prog->array[i];
+		//pet_array_dump(array->);
+		//printf("ARRAY %5s %4s [%d]=%d read_only_scalar=%d local=%d declare_local=%d global=%d linearize=%d\n", array->type, array->name, array->n_index, array->size, array->read_only_scalar, array->local, array->declare_local, array->global, array->linearize);
+		if (array->local)
+			continue;
+		if (!array->accessed)
+			continue;
+		if (gpu_array_is_read_only_scalar(array) && (isl_set_find_dim_by_name(prog->context, isl_dim_param, array->name)>=0))
+			continue; // Already declared as parameter
+		//assert((gpu_array_is_read_only_scalar(array) || gpu_array_requires_device_allocation(array)) && "non-device allocated written scalar might be miscompiled (need to pass by pointer)");
+		assert(array->linearize && "TODO: Implement passing arrays of fixed size as arrays (Compatible with C and C++)");
+
+		p = (*callback)(p, prog, firstarg, NULL, array, user);
+		firstarg = false;
+	}
+
+	return p;
+}
+
+static __isl_give isl_printer * callback_print_prog_parameter(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, __isl_keep isl_id *param, struct gpu_array_info *array, void *user) {
+	isl_bool has_custom_types = *((isl_bool*)user);
+
+	if (!first)
+		p = isl_printer_print_str(p, ", ");
+
+	if (param) {
+		p = isl_printer_print_str(p, "int ");
+		p = isl_printer_print_str(p, isl_id_get_name(param));
+	}
+	if (array) {
+		if (gpu_array_is_read_only_scalar(array)) {
+			p = isl_printer_print_str(p, array->type);
+			p = isl_printer_print_str(p, " ");
+			p = isl_printer_print_str(p, array->name);
+		} else {
+			if (has_custom_types || strcmp(array->type, "float")==0 || strcmp(array->type, "double")==0 || strcmp(array->type, "int")==0 || strcmp(array->type, "char")==0 || strcmp(array->type, "short")==0 )
+				p = isl_printer_print_str(p, array->type);
+			else
+				p = isl_printer_print_str(p, "void"); // To avoid requiring including any headers/declaring types
+			p = isl_printer_print_str(p, " *");
+			p = isl_printer_print_str(p, array->name);
+		}
+	}
+
+	return p;
+}
+
+static __isl_give isl_printer * callback_print_prog_argument(__isl_take isl_printer *p, struct gpu_prog *prog, bool first, __isl_keep isl_id *param, struct gpu_array_info *array, void *user) {
+	if (!first)
+		p = isl_printer_print_str(p, ", ");
+
+	if (param) {
+		p = isl_printer_print_str(p, isl_id_get_name(param));
+	}
+	if (array) {
+		if (gpu_array_is_read_only_scalar(array)) {
+			p = isl_printer_print_str(p, array->name);
+		} else if (gpu_array_is_scalar(array)) {
+			p = isl_printer_print_str(p, "(");
+			p = isl_printer_print_str(p, array->type); // cast away e.g. const
+			p = isl_printer_print_str(p, "*)&");
+			p = isl_printer_print_str(p, array->name);
+		} else {
+			p = isl_printer_print_str(p, "(");
+			p = isl_printer_print_str(p, array->type); // cast away e.g. const
+			p = isl_printer_print_str(p, "*)&");
+			p = isl_printer_print_str(p, array->name);
+			p = isl_printer_print_str(p, "[0]"); // This might be a pointer or decay-to-pointer array; this should handle both
+		}
+	}
+
+	return p;
+}
+
+__isl_give isl_printer *gpu_print_prog_declaration(__isl_take isl_printer *p, struct gpu_prog *prog, isl_bool has_custom_types) {
+	p = isl_printer_print_str(p, "void ");
+	p = print_prog_name(p, prog);
+	p = isl_printer_print_str(p, "(");
+	p = foreach_prog_arg(p, prog, &callback_print_prog_parameter, &has_custom_types);
+	p = isl_printer_print_str(p, ")");
+	return p;
+}
+
+__isl_give isl_printer *gpu_print_prog_invocation(__isl_take isl_printer *p, struct gpu_prog *prog) {
+	p = isl_printer_start_line(p);
+	p = print_prog_name(p, prog);
+	p = isl_printer_print_str(p, "(");
+	p = foreach_prog_arg(p, prog, &callback_print_prog_argument, NULL);
+	p = isl_printer_print_str(p, ");");
+	p = isl_printer_end_line(p);
+	return p;
+}
+
