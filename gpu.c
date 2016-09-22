@@ -643,20 +643,32 @@ static void read_grid_sizes(struct ppcg_kernel *kernel,
 {
 	isl_set *size;
 
-	if (kernel->n_grid > 2)
-		kernel->n_grid = 2;
 	switch (kernel->n_grid) {
 	case 1:
 		kernel->grid_dim[0] = 32768;
 		break;
-	default:
+	case 2:
 		kernel->grid_dim[0] = 256;
 		kernel->grid_dim[1] = 256;
+		break;
+  default:
+		kernel->grid_dim[0] = 16;
+		kernel->grid_dim[1] = 16;
+		kernel->grid_dim[2] = 8;
 		break;
 	}
 
 	size = extract_sizes(sizes, "grid", kernel->id);
-	read_sizes_from_set(size, kernel->grid_dim, &kernel->n_grid);
+	if (size) {
+	  read_sizes_from_set(size, kernel->grid_dim, &kernel->n_grid);
+	  return;
+	}
+
+	if (kernel->n_grid == 3) {
+		kernel->n_grid = 2;
+		kernel->grid_dim[0] = 256;
+		kernel->grid_dim[1] = 256;
+  }
 }
 
 /* Extract user specified grid and block sizes from the gen->sizes

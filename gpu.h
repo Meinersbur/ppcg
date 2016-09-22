@@ -387,7 +387,7 @@ struct ppcg_kernel {
 
 	int n_grid;
 	int n_block;
-	int grid_dim[2];
+	int grid_dim[3];
 	int block_dim[3];
 
 	isl_multi_pw_aff *grid_size;
