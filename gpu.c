@@ -1,7 +1,7 @@
 /*
  * Copyright 2010-2011 INRIA Saclay
  * Copyright 2012-2013 Ecole Normale Superieure
- * Copyright 2016      Sven Verdoolaege
+ * Copyright 2015-2016 Sven Verdoolaege
  *
  * Use of this software is governed by the MIT license
  *
@@ -29,7 +29,9 @@
 #include "gpu.h"
 #include "gpu_array_tile.h"
 #include "gpu_group.h"
+#include "gpu_hybrid.h"
 #include "gpu_tree.h"
+#include "hybrid.h"
 #include "schedule.h"
 #include "ppcg_options.h"
 #include "print.h"
@@ -641,20 +643,32 @@ static void read_grid_sizes(struct ppcg_kernel *kernel,
 {
 	isl_set *size;
 
-	if (kernel->n_grid > 2)
-		kernel->n_grid = 2;
 	switch (kernel->n_grid) {
 	case 1:
 		kernel->grid_dim[0] = 32768;
 		break;
-	default:
+	case 2:
 		kernel->grid_dim[0] = 256;
 		kernel->grid_dim[1] = 256;
+		break;
+  default:
+		kernel->grid_dim[0] = 16;
+		kernel->grid_dim[1] = 16;
+		kernel->grid_dim[2] = 8;
 		break;
 	}
 
 	size = extract_sizes(sizes, "grid", kernel->id);
-	read_sizes_from_set(size, kernel->grid_dim, &kernel->n_grid);
+	if (size) {
+	  read_sizes_from_set(size, kernel->grid_dim, &kernel->n_grid);
+	  return;
+	}
+
+	if (kernel->n_grid == 3) {
+		kernel->n_grid = 2;
+		kernel->grid_dim[0] = 256;
+		kernel->grid_dim[1] = 256;
+  }
 }
 
 /* Extract user specified grid and block sizes from the gen->sizes
@@ -2828,26 +2842,13 @@ static int any_global_or_shared_sync_writes(struct ppcg_kernel *kernel)
 static __isl_give isl_multi_val *construct_band_tiles_sizes(
 	__isl_keep isl_schedule_node *node, int *tile_size)
 {
-	int i, n;
-	isl_ctx *ctx;
 	isl_space *space;
-	isl_multi_val *mv;
 
 	if (!node)
 		return NULL;
 
-	ctx = isl_schedule_node_get_ctx(node);
 	space = isl_schedule_node_band_get_space(node);
-	n = isl_schedule_node_band_n_member(node);
-	mv = isl_multi_val_zero(space);
-	for (i = 0; i < n; ++i) {
-		isl_val *v;
-
-		v = isl_val_int_from_si(ctx, tile_size[i]);
-		mv = isl_multi_val_set_val(mv, i, v);
-	}
-
-	return mv;
+	return ppcg_multi_val_from_int_list(space, tile_size);
 }
 
 /* Replace the partial schedule S of the band node "node" by
@@ -3240,11 +3241,14 @@ static __isl_give isl_schedule_node *unroll(__isl_take isl_schedule_node *node)
  * may have a different mapping from between shared memory elements and
  * threads, such that synchronization is required after the core.
  * "node" is assumed to point to the kernel node.
+ *
+ * If the shared and the thread mark point to the same node, then make
+ * sure the synchronization is inserted outside of the shared mark.
  */
 static __isl_give isl_schedule_node *add_sync(struct ppcg_kernel *kernel,
 	__isl_take isl_schedule_node *node)
 {
-	int kernel_depth;
+	int depth;
 	int need_sync;
 
 	need_sync = any_global_or_shared_sync_writes(kernel);
@@ -3253,12 +3257,13 @@ static __isl_give isl_schedule_node *add_sync(struct ppcg_kernel *kernel,
 	if (!need_sync)
 		return node;
 
-	kernel_depth = isl_schedule_node_get_schedule_depth(node);
-
 	node = gpu_tree_move_down_to_thread(node, kernel->core);
-	if (kernel_depth == isl_schedule_node_get_schedule_depth(node))
-		return gpu_tree_move_up_to_kernel(node);
+	depth = isl_schedule_node_get_schedule_depth(node);
+	node = gpu_tree_move_up_to_kernel(node);
+	if (depth == isl_schedule_node_get_schedule_depth(node))
+		return node;
 
+	node = gpu_tree_move_down_to_depth(node, depth, kernel->core);
 	node = gpu_tree_ensure_following_sync(node, kernel);
 
 	node = gpu_tree_move_up_to_kernel(node);
@@ -3527,6 +3532,9 @@ static __isl_give isl_schedule_node *add_copies_group_private(
  * by the group.  In the case of read from a non-scalar, this set
  * is replaced by the entire shared memory tile.
  *
+ * If the "unroll_copy_shared" option is set, then the AST generator
+ * is instructed to unroll the copying code.
+ *
  * A filter is inserted on type[D -> A] to map the copy instances
  * to the threads.  In particular, the thread identifiers are
  * equated to the position inside the shared memory tile (T)
@@ -3621,6 +3629,8 @@ static __isl_give isl_schedule_node *add_copies_group_shared(
 	graft = isl_schedule_node_child(graft, 0);
 
 	graft = isl_schedule_node_insert_partial_schedule(graft, mupa);
+	if (kernel->options->unroll_copy_shared)
+		graft = ppcg_set_schedule_node_type(graft, isl_ast_loop_unroll);
 
 	if (tile->n > kernel->n_block && kernel->n_block > 0) {
 		graft = isl_schedule_node_band_split(graft,
@@ -3853,7 +3863,10 @@ static __isl_give isl_schedule_node *group_statements(
  * The band that "node" points to is the band that needs to be mapped
  * to block identifiers.  The band that needs to be mapped to thread
  * identifiers should be marked by a "thread" mark by the caller.
- * This mark is removed by this function.
+ * The linear branch between the current node and the "thread" mark
+ * may also have a "shared" mark.  If present, the mapping to shared
+ * memory is computed at that point.
+ * Both marks are removed by this function.
  * If "scale" is set, then the band that "node" points to is scaled
  * by "sizes".
  *
@@ -3906,7 +3919,7 @@ static __isl_give isl_schedule_node *group_statements(
  * that the kernel does not get destroyed if the schedule node
  * is freed due to some error condition.
  */
-static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
+__isl_give isl_schedule_node *gpu_create_kernel(struct gpu_gen *gen,
 	__isl_take isl_schedule_node *node, int scale,
 	__isl_keep isl_multi_val *sizes)
 {
@@ -3918,6 +3931,10 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	isl_set *host_domain;
 	isl_union_set *domain, *expanded;
 	int single_statement;
+
+	node = gpu_tree_insert_shared_before_thread(node);
+	if (!node)
+		return NULL;
 
 	kernel = isl_calloc_type(gen->ctx, struct ppcg_kernel);
 	kernel = ppcg_kernel_create_local_arrays(kernel, gen->prog);
@@ -4036,6 +4053,9 @@ static __isl_give isl_schedule_node *create_kernel(struct gpu_gen *gen,
 	node = add_sync(kernel, node);
 	node = add_copies(kernel, node);
 
+	node = gpu_tree_move_down_to_shared(node, kernel->core);
+	node = isl_schedule_node_delete(node);
+
 	node = gpu_tree_move_down_to_thread(node, kernel->core);
 	node = isl_schedule_node_delete(node);
 
@@ -4076,10 +4096,73 @@ static __isl_give isl_schedule_node *insert_empty_permutable_band(
 	return node;
 }
 
+/* See if hybrid tiling can be performed on "node" and its parent.
+ * If so, apply hybrid tiling and return the updated schedule tree.
+ * If not, return the original schedule tree.
+ * Return NULL on error.
+ *
+ * First check if "node", together with its parent, meets
+ * the basic requirements for hybrid tiling.
+ * If so, compute the relative dependence distances of "node"
+ * with respect to its parent and check if they are sufficiently bounded.
+ * If so, apply hybrid tiling using user specified tile sizes.
+ *
+ * The tile sizes are read before the dependence distance bounds are
+ * computed, because the user may have specified fewer dimensions
+ * than are available.  In this case, the remaining schedule dimensions
+ * are split off and the dependence distances should be computed
+ * after these dimensions have been split off.
+ */
+static __isl_give isl_schedule_node *try_hybrid_tile(struct gpu_gen *gen,
+	__isl_take isl_schedule_node *node)
+{
+	int tile_len;
+	int *tile_size;
+	isl_bool ok;
+	isl_schedule_node *orig = node;
+	ppcg_ht_bounds *bounds;
+
+	ok = ppcg_ht_parent_has_input_pattern(node);
+	if (ok < 0)
+		return isl_schedule_node_free(node);
+	if (!ok)
+		return orig;
+
+	tile_len = 1 + isl_schedule_node_band_n_member(node);
+	tile_size = read_tile_sizes(gen, &tile_len);
+	if (!tile_size)
+		return isl_schedule_node_free(node);
+
+	node = isl_schedule_node_copy(node);
+	node = split_band(node, tile_len - 1);
+	node = isl_schedule_node_parent(node);
+	bounds = ppcg_ht_compute_bounds(gen->prog->scop, node);
+	node = isl_schedule_node_child(node, 0);
+
+	ok = ppcg_ht_bounds_is_valid(bounds);
+	if (ok >= 0 && ok)
+		node = gpu_hybrid_tile(gen, node, bounds, tile_size);
+	else
+		ppcg_ht_bounds_free(bounds);
+	free(tile_size);
+
+	if (ok >= 0 && !ok) {
+		isl_schedule_node_free(node);
+		return orig;
+	}
+	isl_schedule_node_free(orig);
+	if (ok < 0)
+		return isl_schedule_node_free(node);
+	return node;
+}
+
 /* If "node" is the outermost permutable band that can be mapped to block and
  * thread identifiers in its branch (or the root of a subtree with
  * no such outer bands),
  * then mark the band as such, attaching a ppcg_kernel to the mark.
+ *
+ * If hybrid tiling is allowed, then first try and apply it
+ * to "node" and its parent.
  *
  * If "node" is the root of a subtree without permutable bands,
  * then insert a zero-dimensional permutable band such that
@@ -4091,7 +4174,8 @@ static __isl_give isl_schedule_node *insert_empty_permutable_band(
  * Tile "node" using user specified tile sizes, after splitting the band
  * if the number of specified tile sizes is smaller than the dimension
  * of the band.  Mark the point band of this tiling as the band that
- * needs to be mapped to threads.
+ * needs to be mapped to threads and instruct the AST generator to unroll
+ * the band if the "unroll_gpu_tile" option is set.
  * Create a kernel representing the domain instances that reach "node" and
  * insert a mark node pointing to the ppcg_kernel before the band node.
  */
@@ -4112,6 +4196,14 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 	if (!outer)
 		return node;
 
+	if (gen->options->hybrid) {
+		isl_schedule_node *saved = isl_schedule_node_copy(node);
+		node = try_hybrid_tile(gen, node);
+		isl_schedule_node_free(saved);
+		if (node != saved)
+			return node;
+	}
+
 	if (isl_schedule_node_get_type(node) != isl_schedule_node_band ||
 	    !isl_schedule_node_band_member_get_coincident(node, 0))
 		node = insert_empty_permutable_band(node);
@@ -4125,12 +4217,14 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 	sizes = construct_band_tiles_sizes(node, tile_size);
 	node = tile_band(node, isl_multi_val_copy(sizes));
 	node = isl_schedule_node_child(node, 0);
+	if (gen->options->unroll_gpu_tile)
+		node = ppcg_set_schedule_node_type(node, isl_ast_loop_unroll);
 	id = isl_id_alloc(gen->ctx, "thread", NULL);
 	node = isl_schedule_node_insert_mark(node, id);
 	node = isl_schedule_node_parent(node);
 
 	scale = gen->options->scale_tile_loops;
-	node = create_kernel(gen, node, scale, sizes);
+	node = gpu_create_kernel(gen, node, scale, sizes);
 	isl_multi_val_free(sizes);
 	free(tile_size);
 

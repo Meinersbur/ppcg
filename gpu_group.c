@@ -70,11 +70,15 @@ __isl_give isl_union_map *gpu_array_ref_group_access_relation(
 /* Should this array reference group be mapped to private, shared or global
  * memory?
  * If we have computed both a private and a shared tile, then
- * the private tile is used, i.e., the group is mapped to private memory.
+ * the tile with the smallest depth is used.  If both have the same depth,
+ * then the private tile is used.
  */
 enum ppcg_group_access_type gpu_array_ref_group_type(
 	struct gpu_array_ref_group *group)
 {
+	if (group->private_tile && group->shared_tile &&
+	    group->shared_tile->depth < group->private_tile->depth)
+		return ppcg_access_shared;
 	if (group->private_tile)
 		return ppcg_access_private;
 	if (group->shared_tile)
@@ -435,9 +439,12 @@ static int can_tile(__isl_keep isl_map *access, struct gpu_array_tile *tile)
  * kernel_depth is the schedule depth where the kernel launch will
  * be introduced, i.e., it is the depth of the band that is mapped
  * to blocks.
+ * shared_depth is the schedule depth at which the copying to/from
+ * shared memory is computed.  The copy operation may then
+ * later be hoisted to a higher level.
  * thread_depth is the schedule depth where the thread mark is located,
  * i.e., it is the depth of the band that is mapped to threads and also
- * the schedule depth at which the copying to/from shared/private memory
+ * the schedule depth at which the copying to/from private memory
  * is computed.  The copy operation may then later be hoisted to
  * a higher level.
  * n_thread is the number of schedule dimensions in the band that
@@ -446,7 +453,9 @@ static int can_tile(__isl_keep isl_map *access, struct gpu_array_tile *tile)
  * of dimension thread_depth + n_thread) and encodes the mapping
  * to thread identifiers (as parameters).
  * host_sched contains the kernel_depth dimensions of the host schedule.
- * shared_sched contains the first thread_depth dimensions of the
+ * shared_sched contains the first shared_depth dimensions of the
+ * kernel schedule.
+ * copy_sched contains the first thread_depth dimensions of the
  * kernel schedule.
  * thread_sched contains the first (thread_depth + n_thread) dimensions
  * of the kernel schedule.
@@ -458,11 +467,13 @@ static int can_tile(__isl_keep isl_map *access, struct gpu_array_tile *tile)
 struct gpu_group_data {
 	struct ppcg_scop *scop;
 	int kernel_depth;
+	int shared_depth;
 	int thread_depth;
 	int n_thread;
 	isl_set *privatization;
 	isl_union_map *host_sched;
 	isl_union_map *shared_sched;
+	isl_union_map *copy_sched;
 	isl_union_map *thread_sched;
 	isl_union_map *full_sched;
 };
@@ -809,7 +820,7 @@ static int populate_array_references(struct gpu_local_array_info *local,
 {
 	int i;
 	int n;
-	isl_ctx *ctx = isl_union_map_get_ctx(data->shared_sched);
+	isl_ctx *ctx = isl_union_map_get_ctx(data->copy_sched);
 
 	n = 0;
 	for (i = 0; i < local->array->n_ref; ++i) {
@@ -821,7 +832,7 @@ static int populate_array_references(struct gpu_local_array_info *local,
 		map = isl_map_copy(access->access);
 		umap = isl_union_map_from_map(map);
 		umap = isl_union_map_apply_domain(umap,
-				isl_union_map_copy(data->shared_sched));
+				isl_union_map_copy(data->copy_sched));
 
 		if (isl_union_map_is_empty(umap)) {
 			isl_union_map_free(umap);
@@ -870,7 +881,7 @@ struct gpu_array_ref_group *gpu_array_ref_group_free(
 }
 
 /* Check if the access relations of group1 and group2 overlap within
- * shared_sched.
+ * copy_sched.
  */
 static int accesses_overlap(struct gpu_array_ref_group *group1,
 	struct gpu_array_ref_group *group2)
@@ -989,6 +1000,24 @@ static int check_requires_unroll(struct gpu_group_data *data,
 	return !bijective;
 }
 
+/* Map the domain of "access" to the outer data->shared_depth
+ * schedule dimensions.  When data->shared_depth is equal to
+ * data->thread_depth, this result is already available in group->access.
+ */
+static __isl_give isl_map *shared_access(struct gpu_array_ref_group *group,
+	__isl_keep isl_union_map *access, struct gpu_group_data *data)
+{
+	isl_union_map *shared;
+
+	if (data->shared_depth == data->thread_depth)
+		return isl_map_copy(group->access);
+
+	shared = isl_union_map_copy(access);
+	shared = isl_union_map_apply_domain(shared,
+			isl_union_map_copy(data->shared_sched));
+	return isl_map_from_union_map(shared);
+}
+
 /* Compute the private and/or shared memory tiles for the array
  * reference group "group" of array "array".
  * Return 0 on success and -1 on error.
@@ -1100,11 +1129,13 @@ static int compute_group_bounds_core(struct ppcg_kernel *kernel,
 	if (use_shared && (!no_reuse || !coalesced)) {
 		group->shared_tile = gpu_array_tile_create(ctx,
 							group->array->n_index);
+		acc = shared_access(group, access, data);
 		if (!group->shared_tile)
 			r = -1;
-		else if (!can_tile(group->access, group->shared_tile))
+		else if (!can_tile(acc, group->shared_tile))
 			group->shared_tile =
 					gpu_array_tile_free(group->shared_tile);
+		isl_map_free(acc);
 	}
 
 	if (r < 0 || (!force_private && (!use_private || no_reuse))) {
@@ -1509,6 +1540,17 @@ static void check_can_be_private_live_ranges(struct ppcg_kernel *kernel,
 	isl_union_set_free(domain);
 }
 
+/* Expand the domain of the schedule "s" by plugging in
+ * the contraction "contraction" and return the result.
+ */
+static __isl_give isl_union_map *expand(__isl_take isl_union_map *s,
+	__isl_keep isl_union_pw_multi_aff *contraction)
+{
+	contraction = isl_union_pw_multi_aff_copy(contraction);
+	s = isl_union_map_preimage_domain_union_pw_multi_aff(s, contraction);
+	return s;
+}
+
 /* Create a set of dimension data->thread_depth + data->n_thread
  * that equates the residue of the final data->n_thread dimensions
  * modulo the kernel->block_dim sizes to the thread identifiers.
@@ -1560,8 +1602,24 @@ static void compute_privatization(struct gpu_group_data *data,
 	data->privatization = set;
 }
 
+/* Return the prefix schedule at "node" as a relation
+ * between domain elements and schedule dimensions after detecting
+ * equalities in this relation.
+ */
+static __isl_give isl_union_map *prefix_with_equalities(
+	__isl_keep isl_schedule_node *node)
+{
+	isl_union_map *schedule;
+
+	schedule = isl_schedule_node_get_prefix_schedule_relation(node);
+	schedule = isl_union_map_detect_equalities(schedule);
+
+	return schedule;
+}
+
 /* Group references of all arrays in "kernel".
  * "node" points to the kernel mark.
+ * The mapping to shared memory in computed at the "shared" mark.
  *
  * We first extract all required schedule information into
  * a gpu_group_data structure and then consider each array
@@ -1583,26 +1641,34 @@ int gpu_group_references(struct ppcg_kernel *kernel,
 	data.host_sched = isl_schedule_node_get_prefix_schedule_relation(node);
 
 	node = isl_schedule_node_copy(node);
-	node = gpu_tree_move_down_to_thread(node, kernel->core);
-	data.shared_sched =
-		isl_schedule_node_get_prefix_schedule_relation(node);
-	data.shared_sched = isl_union_map_detect_equalities(data.shared_sched);
+	node = gpu_tree_move_down_to_shared(node, kernel->core);
+	data.shared_depth = isl_schedule_node_get_schedule_depth(node);
+	data.shared_sched = prefix_with_equalities(node);
 
+	node = gpu_tree_move_down_to_thread(node, kernel->core);
 	node = isl_schedule_node_child(node, 0);
 	data.thread_depth = isl_schedule_node_get_schedule_depth(node);
 	data.n_thread = isl_schedule_node_band_n_member(node);
-	data.thread_sched = isl_union_map_copy(data.shared_sched);
+	if (data.thread_depth == data.shared_depth)
+		data.copy_sched = isl_union_map_copy(data.shared_sched);
+	else
+		data.copy_sched = prefix_with_equalities(node);
+	data.thread_sched = isl_union_map_copy(data.copy_sched);
 	data.thread_sched = isl_union_map_flat_range_product(data.thread_sched,
 		isl_schedule_node_band_get_partial_schedule_union_map(node));
 	data.thread_sched = isl_union_map_detect_equalities(data.thread_sched);
 
 	contraction = isl_union_pw_multi_aff_copy(kernel->contraction);
-	data.host_sched = isl_union_map_preimage_domain_union_pw_multi_aff(
-		data.host_sched, isl_union_pw_multi_aff_copy(contraction));
-	data.shared_sched = isl_union_map_preimage_domain_union_pw_multi_aff(
-		data.shared_sched, isl_union_pw_multi_aff_copy(contraction));
-	data.thread_sched = isl_union_map_preimage_domain_union_pw_multi_aff(
-		data.thread_sched, contraction);
+	data.host_sched = expand(data.host_sched, contraction);
+	data.shared_sched = expand(data.shared_sched, contraction);
+	if (data.thread_depth == data.shared_depth) {
+		isl_union_map_free(data.copy_sched);
+		data.copy_sched = isl_union_map_copy(data.shared_sched);
+	} else {
+		data.copy_sched = expand(data.copy_sched, contraction);
+	}
+	data.thread_sched = expand(data.thread_sched, contraction);
+	isl_union_pw_multi_aff_free(contraction);
 
 	node = isl_schedule_node_child(node, 0);
 	data.full_sched = isl_union_map_copy(data.thread_sched);
@@ -1620,6 +1686,7 @@ int gpu_group_references(struct ppcg_kernel *kernel,
 
 	isl_union_map_free(data.host_sched);
 	isl_union_map_free(data.shared_sched);
+	isl_union_map_free(data.copy_sched);
 	isl_union_map_free(data.thread_sched);
 	isl_union_map_free(data.full_sched);
 	isl_set_free(data.privatization);

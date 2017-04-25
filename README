@@ -30,7 +30,7 @@ Requirements:
 	(only needed if you want to compile the pet executable)
 - LLVM/clang libraries, 2.9 or higher (http://clang.llvm.org/get_started.html)
 	Unless you have some other reasons for wanting to use the svn version,
-	it is best to install the latest release (3.7).
+	it is best to install the latest release (3.8).
 	For more details, see pet/README.
 
 If you are installing on Ubuntu, then you can install the following packages:
@@ -103,6 +103,11 @@ spaces.  The sizes are specified outermost to innermost.
 The dimension of the "tile" space indicates the (maximal) number of loop
 dimensions to tile.  The elements of the single integer tuple
 specify the tile sizes in each dimension.
+In case of hybrid tiling, the first element is half the size of
+the tile in the time (sequential) dimension.  The second element
+specifies the number of elements in the base of the hexagon.
+The remaining elements specify the tile sizes in the remaining space
+dimensions.
 
 The dimension of the "grid" space indicates the (maximal) number of block
 dimensions in the grid.  The elements of the single integer tuple

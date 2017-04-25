@@ -33,6 +33,9 @@ struct ppcg_options {
 	int tile;
 	int tile_size;
 
+	/* Isolate full tiles from partial tiles. */
+	int isolate_full_tiles;
+
 	/* Take advantage of private memory. */
 	int use_private_memory;
 
@@ -56,6 +59,14 @@ struct ppcg_options {
 
 	/* Allow live range to be reordered. */
 	int live_range_reordering;
+
+	/* Allow hybrid tiling whenever a suitable input pattern is found. */
+	int hybrid;
+
+	/* Unroll the code for copying to/from shared memory. */
+	int unroll_copy_shared;
+	/* Unroll code inside tile on GPU targets. */
+	int unroll_gpu_tile;
 
 	/* Options to pass to the OpenCL compiler.  */
 	char *opencl_compiler_options;

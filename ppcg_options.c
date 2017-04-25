@@ -108,6 +108,8 @@ ISL_ARG_BOOL(struct ppcg_options, non_negative_parameters, 0,
 ISL_ARG_BOOL(struct ppcg_options, tile, 0, "tile", 0,
 	"perform tiling (C target)")
 ISL_ARG_INT(struct ppcg_options, tile_size, 'S', "tile-size", "size", 32, NULL)
+ISL_ARG_BOOL(struct ppcg_options, isolate_full_tiles, 0, "isolate-full-tiles",
+	0, "isolate full tiles from partial tiles (hybrid tiling)")
 ISL_ARG_STR(struct ppcg_options, sizes, 0, "sizes", "sizes", NULL,
 	"Per kernel tile, grid and block sizes")
 ISL_ARG_INT(struct ppcg_options, max_shared_memory, 0,
@@ -128,6 +130,13 @@ ISL_ARG_BOOL(struct ppcg_options, live_range_reordering, 0,
 	"live-range-reordering", 1,
 	"allow successive live ranges on the same memory element "
 	"to be reordered")
+ISL_ARG_BOOL(struct ppcg_options, hybrid, 0, "hybrid", 0,
+	"apply hybrid tiling whenever a suitable input pattern is found "
+	"(GPU targets)")
+ISL_ARG_BOOL(struct ppcg_options, unroll_copy_shared, 0, "unroll-copy-shared",
+	0, "unroll code for copying to/from shared memory")
+ISL_ARG_BOOL(struct ppcg_options, unroll_gpu_tile, 0, "unroll-gpu-tile", 0,
+	"unroll code inside tile on GPU targets")
 ISL_ARG_GROUP("opencl", &ppcg_opencl_options_args, "OpenCL options")
 ISL_ARG_STR(struct ppcg_options, save_schedule_file, 0, "save-schedule",
 	"file", NULL, "save isl computed schedule to <file>")
