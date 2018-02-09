@@ -40,10 +40,16 @@ ppcg_SOURCES = \
 	gpu_array_tile.h \
 	gpu_group.c \
 	gpu_group.h \
+	gpu_hybrid.c \
+	gpu_hybrid.h \
 	gpu_print.c \
 	gpu_print.h \
 	gpu_tree.c \
 	gpu_tree.h \
+	grouping.c \
+	grouping.h \
+	hybrid.c \
+	hybrid.h \
 	schedule.c \
 	schedule.h \
 	ppcg_options.c \
@@ -52,6 +58,7 @@ ppcg_SOURCES = \
 	ppcg.h \
 	print.c \
 	print.h \
+	util.c \
 	util.h \
 	version.c
 
@@ -59,7 +66,12 @@ TESTS = @extra_tests@
 EXTRA_TESTS = opencl_test.sh polybench_test.sh
 TEST_EXTENSIONS = .sh
 
+BUILT_SOURCES = gitversion.h
+
+CLEANFILES = gitversion.h
+
 EXTRA_DIST = \
+	examples \
 	ocl_utilities.c \
 	ocl_utilities.h \
 	tests
