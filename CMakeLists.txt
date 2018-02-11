@@ -58,17 +58,21 @@ add_subdirectory(pet)
 set(ppcg_sources
 	cpu.c
 	cuda.c
-	opencl.c
 	cuda_common.c
 	gpu.c
 	gpu_array_tile.c
 	gpu_group.c
+	gpu_hybrid.c
 	gpu_print.c
 	gpu_tree.c
-	schedule.c
-	ppcg_options.c
+	grouping.c
+	hybrid.c
+	opencl.c
 	ppcg.c
+	ppcg_options.c
 	print.c
+	schedule.c
+	util.c
 	version.c
 )
 
@@ -76,7 +80,10 @@ add_executable(ppcg ${ppcg_sources})
 target_include_directories(ppcg PRIVATE "${PPCG_BINARY_DIR}/include")
 target_link_libraries(ppcg pet isl)
 
-
+if (MSVC)
+  #target_compile_definitions(ppcg PRIVATE -DPATH_MAX=MAX_PATH)
+  target_compile_definitions(ppcg PRIVATE -DPATH_MAX=260)
+endif ()
 
 
 enable_testing()
