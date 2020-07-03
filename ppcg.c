@@ -749,6 +749,34 @@ static void compute_dependences(struct ppcg_scop *scop)
 	isl_union_flow_free(flow);
 }
 
+/* Report the eliminated dead code,
+ * if there is any and if the verbose option is set.
+ */
+static void report_dead_code(struct ppcg_scop *ps,
+	__isl_keep isl_union_set *live)
+{
+	isl_ctx *ctx;
+	isl_printer *p;
+	isl_union_set *dead;
+
+	if (!ps->options->debug->verbose)
+		return;
+	if (isl_union_set_is_equal(ps->domain, live))
+		return;
+
+	ctx = isl_union_set_get_ctx(live);
+	dead = isl_union_set_subtract(isl_union_set_copy(ps->domain),
+					isl_union_set_copy(live));
+
+	p = isl_printer_to_file(ctx, stdout);
+	p = isl_printer_print_str(p, "Eliminated dead instances: ");
+	p = isl_printer_print_union_set(p, dead);
+	p = isl_printer_end_line(p);
+	isl_printer_free(p);
+
+	isl_union_set_free(dead);
+}
+
 /* Eliminate dead code from ps->domain.
  *
  * In particular, intersect both ps->domain and the domain of
@@ -802,6 +830,8 @@ static void eliminate_dead_code(struct ppcg_scop *ps)
 	}
 
 	isl_union_map_free(dep);
+
+	report_dead_code(ps, live);
 
 	ps->domain = isl_union_set_intersect(ps->domain,
 						isl_union_set_copy(live));
