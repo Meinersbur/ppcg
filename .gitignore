@@ -26,3 +26,8 @@ test-driver
 
 opencl_test.sh
 polybench_test.sh
+
+*.o
+*.out
+isl
+pet

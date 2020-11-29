@@ -15,6 +15,8 @@
 #include "cuda_common.h"
 #include "ppcg.h"
 
+#include "help_modify/more_def.h" // help find PATH_MAX wzk 20-11-28
+
 /* Open the host .cu file and the kernel .hu and .cu files for writing.
  * Add the necessary includes.
  */

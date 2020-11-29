@@ -31,6 +31,8 @@
 #include "schedule.h"
 #include "util.h"
 
+#include "help_modify/more_def.h"  // help find PATH_MAX wzk 20-11-28
+
 /* Representation of a statement inside a generated AST.
  *
  * "stmt" refers to the original statement.

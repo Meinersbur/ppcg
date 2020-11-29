@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include "ocl_utilities.h"
 
+#include "help_modify/more_def.h" // help find PATH_MAX wzk 20-11-28
+
 /* Return the OpenCL error string for a given error number.
  */
 const char *opencl_error_string(cl_int error)
