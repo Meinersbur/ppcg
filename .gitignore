@@ -29,5 +29,5 @@ polybench_test.sh
 
 *.o
 *.out
-isl
-pet
+isl/
+pet/
