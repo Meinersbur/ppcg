@@ -5385,8 +5385,7 @@ static __isl_give isl_map *extract_single_tagged_access(
 	isl_multi_pw_aff_free(index);
 	if (isl_space_domain_is_wrapping(space))
 		space = isl_space_domain_factor_domain(space);
-	space2 = isl_space_copy(space);
-	space2 = isl_space_from_domain(isl_space_domain(space));
+	space2 = isl_space_from_domain(isl_space_domain(isl_space_copy(space)));
 	id = pet_expr_access_get_ref_id(expr);
 	space2 = isl_space_set_tuple_id(space2, isl_dim_out, id);
 	space = isl_space_range_product(space2, space);
