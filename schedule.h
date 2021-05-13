@@ -24,4 +24,7 @@ __isl_give isl_schedule *ppcg_get_schedule(isl_ctx *ctx,
 __isl_give isl_schedule_node *ppcg_set_schedule_node_type(
 	__isl_take isl_schedule_node *node, enum isl_ast_loop_type type);
 
+__isl_give isl_schedule_node *ppcg_tile(__isl_take isl_schedule_node *node,
+	__isl_take isl_multi_val *sizes);
+
 #endif

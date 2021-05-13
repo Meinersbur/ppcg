@@ -1,5 +1,6 @@
 /*
  * Copyright 2010-2011 INRIA Saclay
+ * Copyright 2021      Sven Verdoolaege
  *
  * Use of this software is governed by the MIT license
  *
@@ -12,9 +13,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <isl/aff.h>
 #include <isl/set.h>
 #include <isl/map.h>
 #include <isl/constraint.h>
+#include <isl/union_set.h>
+#include <isl/union_map.h>
 
 #include "grouping.h"
 #include "schedule.h"
@@ -188,4 +192,66 @@ __isl_give isl_schedule_node *ppcg_set_schedule_node_type(
 							type);
 
 	return node;
+}
+
+/* Try and shift the given band node to the origin.
+ *
+ * In particular, obtain the set of schedule values and
+ * compute the element-wise minimal value, which may
+ * depend on the parameters.
+ * If this results in any piecewise expressions,
+ * then do not perform any shifting as that may
+ * very well make the resulting code more complicated.
+ * Otherwise shift the band by the opposite of this minimal value.
+ */
+static __isl_give isl_schedule_node *shift_to_origin(
+	__isl_take isl_schedule_node *node)
+{
+	isl_bool is_multi_aff;
+	isl_space *space;
+	isl_union_set *domain, *range;
+	isl_union_map *partial;
+	isl_set *min_domain;
+	isl_set *set;
+	isl_multi_pw_aff *min;
+	isl_multi_aff *min_ma, *shift;
+	isl_multi_union_pw_aff *mupa;
+
+	partial = isl_schedule_node_band_get_partial_schedule_union_map(node);
+	domain = isl_schedule_node_get_domain(node);
+	range = isl_union_set_apply(isl_union_set_copy(domain), partial);
+	space = isl_schedule_node_band_get_space(node);
+	set = isl_union_set_extract_set(range, space);
+	isl_union_set_free(range);
+	min = isl_set_min_multi_pw_aff(set);
+	min_domain = isl_multi_pw_aff_domain(isl_multi_pw_aff_copy(min));
+	min = isl_multi_pw_aff_gist(min, min_domain);
+	is_multi_aff = isl_multi_pw_aff_isa_multi_aff(min);
+	if (is_multi_aff < 0 || !is_multi_aff) {
+		isl_union_set_free(domain);
+		isl_multi_pw_aff_free(min);
+		if (is_multi_aff < 0)
+			return isl_schedule_node_free(node);
+		return node;
+	}
+
+	min_ma = isl_multi_pw_aff_as_multi_aff(min);
+	shift = isl_multi_aff_neg(min_ma);
+	domain = isl_union_set_universe(domain);
+	mupa = isl_multi_union_pw_aff_multi_aff_on_domain(domain, shift);
+	node = isl_schedule_node_band_shift(node, mupa);
+
+	return node;
+}
+
+/* Tile "node" with tile sizes "sizes", but first try and shift the band
+ * to the origin.
+ * Tiling a band that does not start at the origin is likely
+ * to result in initial partial tiles.
+ */
+__isl_give isl_schedule_node *ppcg_tile(__isl_take isl_schedule_node *node,
+	__isl_take isl_multi_val *sizes)
+{
+	node = shift_to_origin(node);
+	return isl_schedule_node_band_tile(node, sizes);
 }

@@ -2822,7 +2822,7 @@ static __isl_give isl_schedule_node *tile_band(
 	shift_point = isl_options_get_tile_shift_point_loops(ctx);
 	isl_options_set_tile_shift_point_loops(ctx, 1);
 
-	node = isl_schedule_node_band_tile(node, sizes);
+	node = ppcg_tile(node, sizes);
 
 	isl_options_set_tile_scale_tile_loops(ctx, scale_tile);
 	isl_options_set_tile_shift_point_loops(ctx, shift_point);

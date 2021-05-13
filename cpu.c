@@ -603,7 +603,7 @@ error:
 static __isl_give isl_schedule_node *tile(__isl_take isl_schedule_node *node,
 	__isl_take isl_multi_val *sizes)
 {
-	node = isl_schedule_node_band_tile(node, sizes);
+	node = ppcg_tile(node, sizes);
 	node = ppcg_set_schedule_node_type(node, isl_ast_loop_atomic);
 
 	return node;
