@@ -13,7 +13,7 @@ SUBDIRS = $(MAYBE_ISL) $(MAYBE_PET) .
 FORCE:
 isl/libisl.la: FORCE
 	cd isl; $(MAKE) $(AM_MAKEFLAGS) libisl.la
-pet/libpet.la: FORCE
+pet/libpet.la: $(LOCAL_ISL_LA) FORCE
 	cd pet; $(MAKE) $(AM_MAKEFLAGS) libpet.la
 
 ACLOCAL_AMFLAGS = -I m4
