@@ -3996,24 +3996,22 @@ __isl_give isl_schedule_node *gpu_create_kernel(struct gpu_gen *gen,
 	return node;
 }
 
-/* Insert a zero-dimensional permutable band at "node".
+/* Insert a zero-dimensional permutable band at "node",
+ * defined over the spaces of the statements that reach this node.
  */
 static __isl_give isl_schedule_node *insert_empty_permutable_band(
 	__isl_take isl_schedule_node *node)
 {
 	isl_space *space;
-	isl_schedule *schedule;
 	isl_union_set *domain;
 	isl_multi_union_pw_aff *mupa;
 
-	schedule = isl_schedule_node_get_schedule(node);
-	domain = isl_schedule_get_domain(schedule);
+	domain = isl_schedule_node_get_universe_domain(node);
 	space = isl_union_set_get_space(domain);
-	isl_union_set_free(domain);
-	isl_schedule_free(schedule);
 
 	space = isl_space_set_from_params(space);
 	mupa = isl_multi_union_pw_aff_zero(space);
+	mupa = isl_multi_union_pw_aff_intersect_domain(mupa, domain);
 	node = isl_schedule_node_insert_partial_schedule(node, mupa);
 	node = isl_schedule_node_band_set_permutable(node, 1);
 
