@@ -194,9 +194,96 @@ __isl_give isl_schedule_node *ppcg_set_schedule_node_type(
 	return node;
 }
 
-/* Try and shift the given band node to the origin.
+/* Does "tile" represent a trivial lattice tile, i.e.,
+ * one with size 1 in all directions?
+ */
+static isl_bool lattice_is_trivial(__isl_keep isl_fixed_box *tile)
+{
+	isl_bool trivial;
+	isl_val *val_one;
+	isl_multi_val *size;
+	isl_multi_val *zero, *one;
+
+	size = isl_fixed_box_get_size(tile);
+	zero = isl_multi_val_sub(isl_multi_val_copy(size),
+				 isl_multi_val_copy(size));
+	val_one = isl_val_one(isl_fixed_box_get_ctx(tile));
+	one = isl_multi_val_add_val(zero, val_one);
+	trivial = isl_multi_val_plain_is_equal(size, one);
+	isl_multi_val_free(size);
+	isl_multi_val_free(one);
+
+	return trivial;
+}
+
+/* Given that the elements of "set" lie on a (rectangular) lattice
+ * with tile "tile", scale it down such that the origin of the result
+ * corresponds to "tile".
+ *
+ * The lattice is of the form
+ *
+ *	offset + size j
+ *
+ * Plug this into "set" to obtain a set in terms of "j"
+ * with j = 0 corresponding to offset in "set".
+ */
+static __isl_give isl_set *scale_down_set(__isl_keep isl_fixed_box *tile,
+	__isl_take isl_set *set)
+{
+	isl_space *space;
+	isl_multi_val *size;
+	isl_multi_aff *offset;
+	isl_multi_aff *id;
+	isl_multi_aff *to_lattice;
+
+	size = isl_fixed_box_get_size(tile);
+	offset = isl_fixed_box_get_offset(tile);
+	space = isl_multi_aff_get_space(offset);
+	id = isl_space_identity_multi_aff_on_domain(isl_space_copy(space));
+	offset = isl_multi_aff_insert_domain(offset, space);
+	to_lattice = isl_multi_aff_scale_multi_val(id, size);
+	to_lattice = isl_multi_aff_add(to_lattice, offset);
+	set = isl_set_preimage_multi_aff(set, to_lattice);
+
+	return set;
+}
+
+/* Given that the schedule values of the band node "node"
+ * lie on a (rectangular) lattice with tile "tile",
+ * scale it down such that the values corresponding to "tile"
+ * are mapped to the origin.
+ * "domain" is the (universe) domain reaching "node".
+ *
+ * The lattice is of the form
+ *
+ *	offset + size j
+ *
+ * Subtract offset and scale down by size.
+ */
+static __isl_give isl_schedule_node *scale_down_band(
+	__isl_keep isl_fixed_box *tile, __isl_take isl_schedule_node *node,
+	__isl_keep isl_union_set *domain)
+{
+	isl_multi_val *size;
+	isl_multi_aff *offset;
+	isl_multi_union_pw_aff *mupa;
+
+	size = isl_fixed_box_get_size(tile);
+	offset = isl_multi_aff_neg(isl_fixed_box_get_offset(tile));
+	domain = isl_union_set_copy(domain);
+	mupa = isl_multi_union_pw_aff_multi_aff_on_domain(domain, offset);
+	node = isl_schedule_node_band_shift(node, mupa);
+	node = isl_schedule_node_band_scale_down(node, size);
+
+	return node;
+}
+
+/* Try and shift the given band node to the origin after
+ * potentially scaling it down first.
  *
  * In particular, obtain the set of schedule values and
+ * first check if they lie on a non-trivial (rectangular) lattice.
+ * If so, scale down both the band node and the set.  Then
  * compute the element-wise minimal value, which may
  * depend on the parameters.
  * If this results in any piecewise expressions,
@@ -204,10 +291,10 @@ __isl_give isl_schedule_node *ppcg_set_schedule_node_type(
  * very well make the resulting code more complicated.
  * Otherwise shift the band by the opposite of this minimal value.
  */
-static __isl_give isl_schedule_node *shift_to_origin(
+static __isl_give isl_schedule_node *scale_down_and_shift_to_origin(
 	__isl_take isl_schedule_node *node)
 {
-	isl_bool is_multi_aff;
+	isl_bool is_multi_aff, trivial;
 	isl_space *space;
 	isl_union_set *domain, *range;
 	isl_union_map *partial;
@@ -216,6 +303,7 @@ static __isl_give isl_schedule_node *shift_to_origin(
 	isl_multi_pw_aff *min;
 	isl_multi_aff *min_ma, *shift;
 	isl_multi_union_pw_aff *mupa;
+	isl_fixed_box *tile;
 
 	partial = isl_schedule_node_band_get_partial_schedule_union_map(node);
 	domain = isl_schedule_node_get_domain(node);
@@ -224,6 +312,16 @@ static __isl_give isl_schedule_node *shift_to_origin(
 	set = isl_union_set_extract_set(range, space);
 	isl_union_set_free(range);
 	domain = isl_union_set_universe(domain);
+
+	tile = isl_set_get_lattice_tile(set);
+	trivial = lattice_is_trivial(tile);
+	if (trivial < 0) {
+		node = isl_schedule_node_free(node);
+	} else if (!trivial) {
+		set = scale_down_set(tile, set);
+		node = scale_down_band(tile, node, domain);
+	}
+	isl_fixed_box_free(tile);
 
 	min = isl_set_min_multi_pw_aff(set);
 	min_domain = isl_multi_pw_aff_domain(isl_multi_pw_aff_copy(min));
@@ -253,6 +351,6 @@ static __isl_give isl_schedule_node *shift_to_origin(
 __isl_give isl_schedule_node *ppcg_tile(__isl_take isl_schedule_node *node,
 	__isl_take isl_multi_val *sizes)
 {
-	node = shift_to_origin(node);
+	node = scale_down_and_shift_to_origin(node);
 	return isl_schedule_node_band_tile(node, sizes);
 }
