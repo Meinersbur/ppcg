@@ -223,6 +223,8 @@ static __isl_give isl_schedule_node *shift_to_origin(
 	space = isl_schedule_node_band_get_space(node);
 	set = isl_union_set_extract_set(range, space);
 	isl_union_set_free(range);
+	domain = isl_union_set_universe(domain);
+
 	min = isl_set_min_multi_pw_aff(set);
 	min_domain = isl_multi_pw_aff_domain(isl_multi_pw_aff_copy(min));
 	min = isl_multi_pw_aff_gist(min, min_domain);
@@ -237,7 +239,6 @@ static __isl_give isl_schedule_node *shift_to_origin(
 
 	min_ma = isl_multi_pw_aff_as_multi_aff(min);
 	shift = isl_multi_aff_neg(min_ma);
-	domain = isl_union_set_universe(domain);
 	mupa = isl_multi_union_pw_aff_multi_aff_on_domain(domain, shift);
 	node = isl_schedule_node_band_shift(node, mupa);
 
