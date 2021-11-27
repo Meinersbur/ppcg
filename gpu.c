@@ -4159,6 +4159,12 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
  * (according to subtree_has_permutable_bands).
  * In the case of a set node, the subtrees can be arbitrarily reordered
  * so any subtree is considered potentially initial and final.
+ *
+ * If the child of a subtree containing suitably permutable bands
+ * is itself a set or sequence node, then recursively collect
+ * further initial/final subtrees.
+ * In the case of an outer sequence node, only do this for the first/last child
+ * containing suitably permutable bands.
  */
 static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 	__isl_keep isl_schedule_node *node, int initial)
@@ -4170,6 +4176,10 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 	enum isl_schedule_node_type type;
 
 	type = isl_schedule_node_get_type(node);
+	if (type < 0)
+		return NULL;
+	if (type != isl_schedule_node_set && type != isl_schedule_node_sequence)
+		return isl_union_set_empty_ctx(isl_schedule_node_get_ctx(node));
 	in_order = type == isl_schedule_node_sequence;
 
 	n = isl_schedule_node_n_children(node);
@@ -4196,8 +4206,17 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 			isl_union_set *filter_i;
 			filter_i = isl_schedule_node_filter_get_filter(node);
 			filter = isl_union_set_union(filter, filter_i);
-		} else if (in_order)
-			break;
+		} else {
+			isl_union_set *filter_i;
+
+			node = isl_schedule_node_child(node, 0);
+			filter_i =
+			    get_non_parallel_subtree_filters(node, initial);
+			filter = isl_union_set_union(filter, filter_i);
+			node = isl_schedule_node_parent(node);
+			if (in_order)
+				break;
+		}
 		node = isl_schedule_node_parent(node);
 	}
 
