@@ -4224,6 +4224,9 @@ static __isl_give isl_union_set *get_initial_non_parallel_subtree_filters(
  * the active instances at "node".
  * "node" is not modified by this function, except that NULL is returned
  * in case of error.
+ *
+ * If there are no local variables or if "domain" is empty,
+ * then clearly no such declarations are needed.
  */
 static __isl_give isl_schedule_node *declare_accessed_local_variables(
 	__isl_take isl_schedule_node *node, struct gpu_prog *prog,
@@ -4231,9 +4234,15 @@ static __isl_give isl_schedule_node *declare_accessed_local_variables(
 {
 	isl_union_pw_multi_aff *contraction;
 	isl_union_set *arrays;
+	isl_bool empty;
 	int i;
 
 	if (!ppcg_scop_any_hidden_declarations(prog->scop))
+		return node;
+	empty = isl_union_set_is_empty(domain);
+	if (empty < 0)
+		return isl_schedule_node_free(node);
+	if (empty)
 		return node;
 	contraction = isl_schedule_node_get_subtree_contraction(node);
 	domain = isl_union_set_copy(domain);
