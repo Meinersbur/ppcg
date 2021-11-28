@@ -5156,7 +5156,7 @@ static __isl_give isl_union_set *node_may_persist(
  * Any array elements that is read without first being written inside
  * the subtree "node" needs to be copied in.
  * Furthermore, if there are any array elements that
- * are copied out, but that may not be written inside "node, then
+ * are copied out, but that may not be written inside "node", then
  * they also need to be copied in to ensure that the value after execution
  * is the same as the value before execution, at least for those array
  * elements that may have their values preserved by the scop or that
