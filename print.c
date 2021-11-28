@@ -419,17 +419,27 @@ __isl_give isl_printer *ppcg_print_declaration(__isl_take isl_printer *p,
 
 /* Print declarations for the arrays in "scop" that are declared
  * and that are exposed (if exposed == 1) or not exposed (if exposed == 0).
+ *
+ * Exploit the information in the context to simplify any size expressions,
+ * but only if the context is non-empty.
  */
 static __isl_give isl_printer *print_declarations(__isl_take isl_printer *p,
 	struct ppcg_scop *scop, int exposed)
 {
 	int i;
 	isl_ast_build *build;
+	isl_bool empty;
 
 	if (!scop)
 		return isl_printer_free(p);
 
-	build = isl_ast_build_from_context(isl_set_copy(scop->context));
+	empty = isl_set_is_empty(scop->context);
+	if (empty < 0)
+		return isl_printer_free(p);
+	if (empty)
+		build = isl_ast_build_alloc(isl_set_get_ctx(scop->context));
+	else
+		build = isl_ast_build_from_context(isl_set_copy(scop->context));
 	for (i = 0; i < scop->pet->n_array; ++i) {
 		struct pet_array *array = scop->pet->arrays[i];
 
