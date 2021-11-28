@@ -5084,6 +5084,8 @@ static isl_stat update_may_persist_at(__isl_keep isl_schedule_node *node,
  * This includes the set of array elements that may need to be preserved
  * by the entire scop (prog->may_persist) and the elements for which
  * there is a potential flow dependence that may cross a kernel launch.
+ * "domain" contains the original statement instances, i.e.,
+ * those that correspond to the domains of the access relations in "prog".
  *
  * To determine the second set, we start from all flow dependences.
  * From this set of dependences, we remove those that cannot possibly
@@ -5114,11 +5116,11 @@ static isl_stat update_may_persist_at(__isl_keep isl_schedule_node *node,
  * preserved by the entire scop.
  */
 static __isl_give isl_union_set *node_may_persist(
-	__isl_keep isl_schedule_node *node, struct gpu_prog *prog)
+	__isl_keep isl_schedule_node *node, __isl_keep isl_union_set *domain,
+	struct gpu_prog *prog)
 {
 	struct ppcg_may_persist_data data;
 	isl_union_pw_multi_aff *contraction;
-	isl_union_set *domain;
 	isl_union_set *persist;
 	isl_union_map *flow, *local_flow;
 
@@ -5135,10 +5137,7 @@ static __isl_give isl_union_set *node_may_persist(
 	flow = data.may_persist_flow;
 	isl_union_map_free(data.local_flow);
 
-	domain = isl_schedule_node_get_domain(node);
-	contraction = isl_schedule_node_get_subtree_contraction(node);
-	domain = isl_union_set_preimage_union_pw_multi_aff(domain,
-				    contraction);
+	domain = isl_union_set_copy(domain);
 	domain = isl_union_set_preimage_union_pw_multi_aff(domain,
 				    isl_union_pw_multi_aff_copy(data.tagger));
 	flow = isl_union_map_subtract_domain(flow, isl_union_set_copy(domain));
@@ -5227,7 +5226,7 @@ static __isl_give isl_schedule_node *add_to_from_device(
 	must_write = isl_union_map_copy(prog->must_write);
 	must_write = isl_union_map_apply_domain(must_write,
 					isl_union_map_copy(prefix));
-	may_persist = node_may_persist(node, prog);
+	may_persist = node_may_persist(node, domain, prog);
 	may_write = isl_union_map_intersect_range(may_write, may_persist);
 	not_written = isl_union_map_subtract(may_write, must_write);
 
