@@ -5033,10 +5033,8 @@ static isl_stat update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 	contraction = isl_schedule_node_get_subtree_contraction(parent);
 	isl_schedule_node_free(parent);
 
-	if (type == isl_schedule_node_set)
-		return filter_flow(node, data, contraction);
-
-	remove_all_external_flow(node, data, contraction);
+	if (type == isl_schedule_node_sequence)
+		remove_all_external_flow(node, data, contraction);
 
 	return filter_flow(node, data, contraction);
 }
