@@ -749,6 +749,36 @@ static void compute_dependences(struct ppcg_scop *scop)
 	isl_union_flow_free(flow);
 }
 
+/* Report an empty context, meaning that the original code
+ * cannot not be executed.
+ *
+ * Make a distinction between whether the original context
+ * was already empty or whether the current context
+ * (with additional constraints specified by the user) is empty.
+ */
+static void report_empty_context(struct ppcg_scop *ps)
+{
+	isl_bool empty;
+
+	if (!ps->options->debug->verbose)
+		return;
+	empty = isl_set_is_empty(ps->pet->context);
+	if (empty < 0)
+		return;
+	if (empty) {
+		fprintf(stdout, "Original code cannot be executed "
+			"under any conditions\n");
+		return;
+	}
+	empty = isl_set_is_empty(ps->context);
+	if (empty < 0)
+		return;
+	if (!empty)
+		return;
+	fprintf(stdout, "Original code cannot be executed "
+		"under specified conditions\n");
+}
+
 /* Report the eliminated dead code,
  * if there is any and if the verbose option is set.
  */
@@ -946,6 +976,8 @@ static struct ppcg_scop *ppcg_scop_from_pet_scop(struct pet_scop *scop,
 	for (i = 0; i < scop->n_independence; ++i)
 		ps->independence = isl_union_map_union(ps->independence,
 			isl_union_map_copy(scop->independences[i]->filter));
+
+	report_empty_context(ps);
 
 	compute_tagger(ps);
 	compute_dependences(ps);
