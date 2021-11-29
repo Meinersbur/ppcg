@@ -4981,6 +4981,31 @@ static void remove_external_flow(struct ppcg_may_persist_data *data,
 							flow);
 }
 
+/* Remove those flow dependences from data->may_persist_flow
+ * that flow between statement instances that are both executed either before or
+ * after "node", within the same iteration of outer bands.
+ * "contraction" maps the leaf domain elements of the schedule tree
+ * to the corresponding elements of the filters of "domain" and its siblings.
+ */
+static void remove_all_external_flow(__isl_keep isl_schedule_node *node,
+	struct ppcg_may_persist_data *data,
+	__isl_keep isl_union_pw_multi_aff *contraction)
+{
+	isl_space *space;
+	isl_union_set *before, *after, *filter;
+
+	filter = isl_schedule_node_filter_get_filter(node);
+	space = isl_union_set_get_space(filter);
+	isl_union_set_free(filter);
+	before = isl_union_set_empty(space);
+	after = isl_union_set_copy(before);
+	before = add_previous_filters(before, node);
+	after = add_next_filters(after, node);
+
+	remove_external_flow(data, before, contraction);
+	remove_external_flow(data, after, contraction);
+}
+
 /* Update the information in "data" based on the filter ancestor "node".
  * We only need to modify anything if the filter is the child
  * of a set or sequence node.
@@ -4997,9 +5022,7 @@ static isl_stat update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 {
 	enum isl_schedule_node_type type;
 	isl_schedule_node *parent;
-	isl_space *space;
 	isl_union_pw_multi_aff *contraction;
-	isl_union_set *before, *after, *filter;
 
 	type = isl_schedule_node_get_parent_type(node);
 	if (type != isl_schedule_node_sequence && type != isl_schedule_node_set)
@@ -5013,16 +5036,7 @@ static isl_stat update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 	if (type == isl_schedule_node_set)
 		return filter_flow(node, data, contraction);
 
-	filter = isl_schedule_node_filter_get_filter(node);
-	space = isl_union_set_get_space(filter);
-	isl_union_set_free(filter);
-	before = isl_union_set_empty(space);
-	after = isl_union_set_copy(before);
-	before = add_previous_filters(before, node);
-	after = add_next_filters(after, node);
-
-	remove_external_flow(data, before, contraction);
-	remove_external_flow(data, after, contraction);
+	remove_all_external_flow(node, data, contraction);
 
 	return filter_flow(node, data, contraction);
 }
