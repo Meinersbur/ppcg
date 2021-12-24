@@ -4206,28 +4206,6 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 	return filter;
 }
 
-/* Given a set or sequence node, return the union of the filters of
- * the direct subtrees that do not contain any suitably permutable bands
- * (according to subtree_has_permutable_bands) and
- * that are in the final positions (or can be moved there).
- */
-static __isl_give isl_union_set *get_final_non_parallel_subtree_filters(
-	__isl_keep isl_schedule_node *node)
-{
-	return get_non_parallel_subtree_filters(node, 0);
-}
-
-/* Given a set or sequence node, return the union of the filters of
- * the direct subtrees that do not contain any suitably permutable bands
- * (according to subtree_has_permutable_bands) and
- * that are in the initial positions (or can be moved there).
- */
-static __isl_give isl_union_set *get_initial_non_parallel_subtree_filters(
-	__isl_keep isl_schedule_node *node)
-{
-	return get_non_parallel_subtree_filters(node, 1);
-}
-
 /* Mark all variables that are accessed by the statement instances in "domain"
  * and that are local to "prog" as requiring a declaration in the host code.
  * The statement instances in "domain" correspond to (a subset of)
@@ -4283,26 +4261,18 @@ error:
 	return isl_schedule_node_free(node);
 }
 
-/* If "node" points to a set node, then separate its children
- * into subtrees that have suitably permutable bands and
- * those that do not.
- * Adjust the schedule tree in order to execute the second group
- * after the first group and return a pointer to the first group,
- * assuming there are any such subtrees.
- * The second group is executed after the first group because
- * otherwise the arrays partially written by the second group
- * could get overwritten by the copy-out corresponding to the first group,
- * requiring those arrays to be copied in first.
- * If "node" points to a sequence node, then separate the initial
+/* If "node" points to a set or sequence node, then separate the initial
+ * (if "initial" is set) or final (if "initial" is not set)
  * children that do not have suitably permutable bands and
  * return a pointer to the subsequence of children that do have such bands,
  * assuming there are any such subtrees.
  *
- * In both cases, mark all local variables in "prog" that are accessed by
+ * Mark all local variables in "prog" that are accessed by
  * the group without permutable bands as requiring a declaration on the host.
  */
-static __isl_give isl_schedule_node *isolate_permutable_subtrees(
-	__isl_take isl_schedule_node *node, struct gpu_prog *prog)
+static __isl_give isl_schedule_node *partial_isolate_permutable_subtrees(
+	__isl_take isl_schedule_node *node, struct gpu_prog *prog,
+	int initial)
 {
 	isl_union_set *filter;
 	enum isl_schedule_node_type type;
@@ -4310,16 +4280,36 @@ static __isl_give isl_schedule_node *isolate_permutable_subtrees(
 	if (!node)
 		return NULL;
 	type = isl_schedule_node_get_type(node);
-	if (type == isl_schedule_node_set) {
-		filter = get_final_non_parallel_subtree_filters(node);
-		node = declare_accessed_local_variables(node, prog, filter);
-		node = isl_schedule_node_order_after(node, filter);
-	} else if (type == isl_schedule_node_sequence) {
-		filter = get_initial_non_parallel_subtree_filters(node);
-		node = declare_accessed_local_variables(node, prog, filter);
-		node = isl_schedule_node_order_before(node, filter);
-	}
+	if (type != isl_schedule_node_set && type != isl_schedule_node_sequence)
+		return node;
 
+	filter = get_non_parallel_subtree_filters(node, initial);
+	node = declare_accessed_local_variables(node, prog, filter);
+	if (initial)
+		node = isl_schedule_node_order_before(node, filter);
+	else
+		node = isl_schedule_node_order_after(node, filter);
+
+	return node;
+}
+
+/* If "node" points to a set or sequence node, then separate the initial and
+ * final children that do not have suitably permutable bands and
+ * return a pointer to the subsequence of children that do have such bands.
+ *
+ * In the case of a set node, the children can be arbitrarily reordered,
+ * so they can all be considered initial and final.
+ * Separate them out as final children (first) so that they are executed
+ * after the other children.
+ * Otherwise the arrays partially written by the non-permutable subtrees
+ * could get overwritten by the copy-out corresponding to the other subtrees,
+ * requiring those arrays to be copied in first.
+ */
+static __isl_give isl_schedule_node *isolate_permutable_subtrees(
+	__isl_take isl_schedule_node *node, struct gpu_prog *prog)
+{
+	node = partial_isolate_permutable_subtrees(node, prog, 0);
+	node = partial_isolate_permutable_subtrees(node, prog, 1);
 	return node;
 }
 
