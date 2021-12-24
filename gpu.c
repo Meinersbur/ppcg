@@ -4153,13 +4153,15 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 	return node;
 }
 
-/* Given a set or sequence node, return the union of the filters of either all
- * (in the case of a set node) or the initial (in the case of a sequence node)
+/* Given a set or sequence node, return the union of the filters of
+ * the initial (if "initial" is set) or final (if "initial" is not set)
  * direct subtrees that do not contain any suitably permutable bands
  * (according to subtree_has_permutable_bands).
+ * In the case of a set node, the subtrees can be arbitrarily reordered
+ * so any subtree is considered potentially initial and final.
  */
 static __isl_give isl_union_set *get_non_parallel_subtree_filters(
-	__isl_keep isl_schedule_node *node)
+	__isl_keep isl_schedule_node *node, int initial)
 {
 	isl_space *space;
 	isl_union_set *filter;
@@ -4184,8 +4186,9 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 
 	for (i = 0; i < n; ++i) {
 		isl_bool parallelism;
+		int child = initial ? i : n - 1 - i;
 
-		node = isl_schedule_node_child(node, i);
+		node = isl_schedule_node_child(node, child);
 		parallelism = subtree_has_permutable_bands(node);
 		if (parallelism < 0) {
 			filter = isl_union_set_free(filter);
@@ -4203,24 +4206,26 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 	return filter;
 }
 
-/* Given a set node, return the union of the filters of
+/* Given a set or sequence node, return the union of the filters of
  * the direct subtrees that do not contain any suitably permutable bands
- * (according to subtree_has_permutable_bands).
+ * (according to subtree_has_permutable_bands) and
+ * that are in the final positions (or can be moved there).
  */
-static __isl_give isl_union_set *get_all_non_parallel_subtree_filters(
+static __isl_give isl_union_set *get_final_non_parallel_subtree_filters(
 	__isl_keep isl_schedule_node *node)
 {
-	return get_non_parallel_subtree_filters(node);
+	return get_non_parallel_subtree_filters(node, 0);
 }
 
-/* Given a sequence node, return the union of the filters of
- * the initial direct subtrees that do not contain any suitably permutable
- * bands (according to subtree_has_permutable_bands).
+/* Given a set or sequence node, return the union of the filters of
+ * the direct subtrees that do not contain any suitably permutable bands
+ * (according to subtree_has_permutable_bands) and
+ * that are in the initial positions (or can be moved there).
  */
 static __isl_give isl_union_set *get_initial_non_parallel_subtree_filters(
 	__isl_keep isl_schedule_node *node)
 {
-	return get_non_parallel_subtree_filters(node);
+	return get_non_parallel_subtree_filters(node, 1);
 }
 
 /* Mark all variables that are accessed by the statement instances in "domain"
@@ -4302,7 +4307,7 @@ static __isl_give isl_schedule_node *isolate_permutable_subtrees(
 		return NULL;
 	type = isl_schedule_node_get_type(node);
 	if (type == isl_schedule_node_set) {
-		filter = get_all_non_parallel_subtree_filters(node);
+		filter = get_final_non_parallel_subtree_filters(node);
 		node = declare_accessed_local_variables(node, prog, filter);
 		node = isl_schedule_node_order_after(node, filter);
 	} else if (type == isl_schedule_node_sequence) {
