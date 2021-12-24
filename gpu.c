@@ -4178,7 +4178,7 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 	filter = isl_union_set_empty(space);
 
 	for (i = 0; i < n; ++i) {
-		int parallelism;
+		isl_bool parallelism;
 
 		node = isl_schedule_node_child(node, i);
 		parallelism = subtree_has_permutable_bands(node);
