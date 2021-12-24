@@ -5218,6 +5218,7 @@ static __isl_give isl_schedule_node *add_to_from_device(
 	may_write = isl_union_map_apply_range(may_write,
 					isl_union_map_copy(prog->to_outer));
 	may_write = approximate_copy_out(may_write, prog);
+	may_persist = node_may_persist(node, domain, prog);
 	may_write = isl_union_map_apply_domain(may_write,
 					isl_union_map_copy(prefix));
 	copy_out = isl_union_map_copy(may_write);
@@ -5226,7 +5227,6 @@ static __isl_give isl_schedule_node *add_to_from_device(
 	must_write = isl_union_map_copy(prog->must_write);
 	must_write = isl_union_map_apply_domain(must_write,
 					isl_union_map_copy(prefix));
-	may_persist = node_may_persist(node, domain, prog);
 	may_write = isl_union_map_intersect_range(may_write, may_persist);
 	not_written = isl_union_map_subtract(may_write, must_write);
 
