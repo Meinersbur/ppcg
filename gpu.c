@@ -4154,16 +4154,21 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 }
 
 /* Given a set or sequence node, return the union of the filters of either all
- * (if "only_initial" is not set) or the initial (if "only_initial" is set)
+ * (in the case of a set node) or the initial (in the case of a sequence node)
  * direct subtrees that do not contain any suitably permutable bands
  * (according to subtree_has_permutable_bands).
  */
 static __isl_give isl_union_set *get_non_parallel_subtree_filters(
-	__isl_keep isl_schedule_node *node, int only_initial)
+	__isl_keep isl_schedule_node *node)
 {
 	isl_space *space;
 	isl_union_set *filter;
 	int i, n;
+	int in_order;
+	enum isl_schedule_node_type type;
+
+	type = isl_schedule_node_get_type(node);
+	in_order = type == isl_schedule_node_sequence;
 
 	n = isl_schedule_node_n_children(node);
 	if (n < 0)
@@ -4188,7 +4193,7 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 			isl_union_set *filter_i;
 			filter_i = isl_schedule_node_filter_get_filter(node);
 			filter = isl_union_set_union(filter, filter_i);
-		} else if (only_initial)
+		} else if (in_order)
 			break;
 		node = isl_schedule_node_parent(node);
 	}
@@ -4198,24 +4203,24 @@ static __isl_give isl_union_set *get_non_parallel_subtree_filters(
 	return filter;
 }
 
-/* Given a set or sequence node, return the union of the filters of
+/* Given a set node, return the union of the filters of
  * the direct subtrees that do not contain any suitably permutable bands
  * (according to subtree_has_permutable_bands).
  */
 static __isl_give isl_union_set *get_all_non_parallel_subtree_filters(
 	__isl_keep isl_schedule_node *node)
 {
-	return get_non_parallel_subtree_filters(node, 0);
+	return get_non_parallel_subtree_filters(node);
 }
 
-/* Given a set or sequence node, return the union of the filters of
+/* Given a sequence node, return the union of the filters of
  * the initial direct subtrees that do not contain any suitably permutable
  * bands (according to subtree_has_permutable_bands).
  */
 static __isl_give isl_union_set *get_initial_non_parallel_subtree_filters(
 	__isl_keep isl_schedule_node *node)
 {
-	return get_non_parallel_subtree_filters(node, 1);
+	return get_non_parallel_subtree_filters(node);
 }
 
 /* Mark all variables that are accessed by the statement instances in "domain"
