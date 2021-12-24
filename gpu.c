@@ -4890,6 +4890,17 @@ static __isl_give isl_union_set *expand_and_tag(
 	return domain;
 }
 
+/* Apply the filter "filter" to both domain and range of "flow" and
+ * return the result.
+ */
+static __isl_give isl_union_map *apply_filter(__isl_take isl_union_map *flow,
+	__isl_take isl_union_set *filter)
+{
+	flow = isl_union_map_intersect_domain(flow, isl_union_set_copy(filter));
+	flow = isl_union_map_intersect_range(flow, filter);
+	return flow;
+}
+
 /* Given a filter node that is the child of a set or sequence node,
  * restrict data->local_flow to refer only to those elements
  * in the filter of the node.
@@ -4901,14 +4912,10 @@ static isl_stat filter_flow(__isl_keep isl_schedule_node *node,
 	__isl_take isl_union_pw_multi_aff *contraction)
 {
 	isl_union_set *filter;
-	isl_union_map *flow;
 
-	flow = data->local_flow;
 	filter = isl_schedule_node_filter_get_filter(node);
 	filter = expand_and_tag(filter, contraction, data);
-	flow = isl_union_map_intersect_domain(flow, isl_union_set_copy(filter));
-	flow = isl_union_map_intersect_range(flow, filter);
-	data->local_flow = flow;
+	data->local_flow = apply_filter(data->local_flow, filter);
 
 	return isl_stat_ok;
 }
