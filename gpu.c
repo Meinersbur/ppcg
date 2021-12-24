@@ -4830,6 +4830,18 @@ static __isl_give isl_union_set *extract_local_accesses(struct gpu_prog *prog,
  * "local_flow" is equal to "inner_band_flow", except that the domain
  * and the range have been intersected with intermediate filters
  * on children of sets or sequences.
+ *
+ * "local_may_overwrite" and "outer_may_overwrite" are subsets
+ * of tagged dependences between potentially live-out write accesses and
+ * write accesses to the same array (but not necessarily the same element)
+ * that cause the array to be copied out from the device.
+ * Such a dependence means that the array needs to be copied in first
+ * to ensure that the potentially live-out write access is not overwritten
+ * by the copy-ouy from the device.
+ * "local_may_overwrite" are those that are local to a given iteration
+ * of the outer band nodes with respect to the current node.
+ * "outer_may_overwrite" are those where the domain may be executed
+ * before the range.
  */
 struct ppcg_may_persist_data {
 	isl_union_pw_multi_aff *tagger;
@@ -4837,11 +4849,46 @@ struct ppcg_may_persist_data {
 	isl_union_map *local_flow;
 	isl_union_map *inner_band_flow;
 	isl_union_map *may_persist_flow;
+
+	isl_union_map *local_may_overwrite;
+	isl_union_map *outer_may_overwrite;
 };
+
+/* Update the may-overwrite information in "data"
+ * based on the partial schedule "partial" of some band ancestor node.
+ * The partial schedule is formulated in terms of the tagged
+ * original statement instances.
+ *
+ * "outer_may_overwrite" is extended with those dependences
+ * that are local to the outer nodes, but where the live-out write access
+ * appears before copy-out inducing access in the current band node.
+ * "local_may_overwrite" is narrowed down to those dependences
+ * that are also local to the current band node.
+ */
+static isl_stat update_may_overwrite_at_band(
+	__isl_keep isl_multi_union_pw_aff *partial,
+	struct ppcg_may_persist_data *data)
+{
+	isl_union_map *local, *outer;
+
+	outer = isl_union_map_copy(data->local_may_overwrite);
+	outer = isl_union_map_lex_lt_at_multi_union_pw_aff(outer,
+				isl_multi_union_pw_aff_copy(partial));
+	outer = isl_union_map_union(data->outer_may_overwrite, outer);
+	data->outer_may_overwrite = outer;
+
+	local = data->local_may_overwrite;
+	local = isl_union_map_eq_at_multi_union_pw_aff(local,
+				isl_multi_union_pw_aff_copy(partial));
+	data->local_may_overwrite = local;
+
+	return isl_stat_ok;
+}
 
 /* Update the information in "data" based on the band ancestor "node".
  *
- * In particular, we restrict the dependences in data->local_flow
+ * In particular, update the may-overwrite information.
+ * Also, restrict the dependences in data->local_flow
  * to those dependence where the source and the sink occur in
  * the same iteration of the given band node.
  * We also update data->inner_band_flow to the new value of
@@ -4863,6 +4910,9 @@ static isl_stat update_may_persist_at_band(__isl_keep isl_schedule_node *node,
 								contraction);
 	partial = isl_multi_union_pw_aff_pullback_union_pw_multi_aff(partial,
 				isl_union_pw_multi_aff_copy(data->tagger));
+
+	if (update_may_overwrite_at_band(partial, data) < 0)
+		partial = isl_multi_union_pw_aff_free(partial);
 
 	flow = data->local_flow;
 	flow = isl_union_map_eq_at_multi_union_pw_aff(flow, partial);
@@ -4902,8 +4952,8 @@ static __isl_give isl_union_map *apply_filter(__isl_take isl_union_map *flow,
 }
 
 /* Given a filter node that is the child of a set or sequence node,
- * restrict data->local_flow to refer only to those elements
- * in the filter of the node.
+ * restrict data->local_flow and data->local_may_overwrite
+ * to refer only to those elements in the filter of the node.
  * "contraction" maps the leaf domain elements of the schedule tree
  * to the corresponding domain elements at (the parent of) "node".
  */
@@ -4915,6 +4965,8 @@ static isl_stat filter_flow(__isl_keep isl_schedule_node *node,
 
 	filter = isl_schedule_node_filter_get_filter(node);
 	filter = expand_and_tag(filter, contraction, data);
+	data->local_may_overwrite = apply_filter(data->local_may_overwrite,
+					isl_union_set_copy(filter));
 	data->local_flow = apply_filter(data->local_flow, filter);
 
 	return isl_stat_ok;
@@ -5013,16 +5065,60 @@ static void remove_all_external_flow(__isl_keep isl_schedule_node *node,
 	remove_external_flow(data, after, contraction);
 }
 
+/* Update the may-overwrite information in "data"
+ * based on the filter ancestor "node".
+ * "parent_type" is the type of the parent of the filter and
+ * is either isl_schedule_node_set or isl_schedule_node_sequence.
+ * "contraction" maps the leaf domain elements of the schedule tree
+ * to the corresponding domain elements at (the parent of) "node".
+ *
+ * First collect the filters of the siblings that may be executed
+ * before the current sibling.  In the case of a sequence,
+ * these are the previous sibling.  In the case of a set,
+ * these are all siblings of the current node.
+ * "outer_may_overwrite" is then extended with those dependences
+ * that are local to the outer nodes, but where the live-out write access
+ * appears in one of those siblings.
+ */
+static isl_stat update_may_overwrite_at_filter(
+	__isl_keep isl_schedule_node *node, struct ppcg_may_persist_data *data,
+	enum isl_schedule_node_type parent_type,
+	__isl_keep isl_union_pw_multi_aff *contraction)
+{
+	isl_ctx *ctx;
+	isl_union_set *may_before;
+	isl_union_map *outer;
+
+	ctx = isl_schedule_node_get_ctx(node);
+	may_before = isl_union_set_empty_ctx(ctx);
+	may_before = add_previous_filters(may_before, node);
+	if (parent_type == isl_schedule_node_set)
+		may_before = add_next_filters(may_before, node);
+
+	may_before = isl_union_set_preimage_union_pw_multi_aff(may_before,
+			    isl_union_pw_multi_aff_copy(contraction));
+	outer = isl_union_map_copy(data->local_may_overwrite);
+	outer = isl_union_map_intersect_domain_wrapped_domain_union_set(outer,
+								    may_before);
+	data->outer_may_overwrite =
+	    isl_union_map_union(data->outer_may_overwrite, outer);
+
+	return isl_stat_ok;
+}
+
 /* Update the information in "data" based on the filter ancestor "node".
  * We only need to modify anything if the filter is the child
  * of a set or sequence node.
+ *
+ * In particular, update the may-overwrite information.
  *
  * In the case of a sequence, we remove the dependences between
  * statement instances that are both executed either before or
  * after the subtree that will be mapped to a kernel, within
  * the same iteration of outer bands.
  *
- * In both cases, we restrict data->local_flow to the current child.
+ * In both cases, data->local_flow and data->local_may_overwrite
+ * are restricted to the current child.
  */
 static isl_stat update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 	struct ppcg_may_persist_data *data)
@@ -5039,6 +5135,9 @@ static isl_stat update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 	parent = isl_schedule_node_parent(parent);
 	contraction = isl_schedule_node_get_subtree_contraction(parent);
 	isl_schedule_node_free(parent);
+
+	if (update_may_overwrite_at_filter(node, data, type, contraction) < 0)
+		contraction = isl_union_pw_multi_aff_free(contraction);
 
 	if (type == isl_schedule_node_sequence)
 		remove_all_external_flow(node, data, contraction);
@@ -5079,13 +5178,69 @@ static isl_stat update_may_persist_at(__isl_keep isl_schedule_node *node,
 	return isl_stat_ok;
 }
 
-/* Determine the set of array elements that may need to be perserved
+/* Initialize the "local_may_overwrite" and "outer_may_overwrite" fields
+ * of "data".
+ * "domain" contains the original statement instances covered
+ * by the copy-out, i.e.,
+ * those that correspond to the domains of the access relations in "prog".
+ * "copy_out" contains the outer arrays that will be copied out,
+ * relative to the statement instances that write to (some element of)
+ * the arrays.
+ *
+ * First consider the potential live-out writes from statement instances
+ * outside of "domain" and add the corresponding reference tags.
+ * Similarly, extend "copy_out" to map to the inner arrays and
+ * to include the reference tags.
+ *
+ * The initial value of "local_may_overwrite" maps the domain elements
+ * of these two relations that map to some common array element.
+ * The initial value of "outer_may_overwrite" is empty.
+ */
+static void init_may_overwrite(struct ppcg_may_persist_data *data,
+	__isl_keep isl_union_set *domain, __isl_keep isl_union_map *copy_out,
+	struct gpu_prog *prog)
+{
+	isl_union_map *live_out, *tagged_live_out, *tagged_may_writes;
+
+	live_out = isl_union_map_copy(prog->scop->live_out);
+	live_out = isl_union_map_subtract_domain(live_out,
+						isl_union_set_copy(domain));
+	tagged_may_writes = isl_union_map_copy(prog->scop->tagged_may_writes);
+	tagged_live_out =
+	    isl_union_map_intersect_domain_factor_domain(tagged_may_writes,
+								live_out);
+	copy_out = isl_union_map_copy(copy_out);
+	copy_out = isl_union_map_apply_range(copy_out,
+					isl_union_map_copy(prog->to_inner));
+	tagged_may_writes = isl_union_map_copy(prog->scop->tagged_may_writes);
+	tagged_may_writes = isl_union_map_universe(tagged_may_writes);
+	copy_out =
+		isl_union_map_intersect_domain_factor_domain(tagged_may_writes,
+							    copy_out);
+
+	data->local_may_overwrite = isl_union_map_apply_range(tagged_live_out,
+					    isl_union_map_reverse(copy_out));
+	data->outer_may_overwrite = isl_union_map_empty_ctx(prog->ctx);
+}
+
+/* Determine the set of array elements that may need to be preserved
  * by a kernel constructed from the subtree at "node".
  * This includes the set of array elements that may need to be preserved
- * by the entire scop (prog->may_persist) and the elements for which
- * there is a potential flow dependence that may cross a kernel launch.
+ * by the entire scop (prog->may_persist), the elements for which
+ * there is a potential flow dependence that may cross a kernel launch and
+ * the elements that are live-out that may get overwritten by a copy-out.
  * "domain" contains the original statement instances, i.e.,
  * those that correspond to the domains of the access relations in "prog".
+ * "copy_out" contains the outer arrays that will be copied out,
+ * relative to the statement instances that write to (some element of)
+ * the arrays.
+ *
+ * To determine the third set, relate all potential live-out write instances
+ * outside of "domain" to statement instances (in "domain")
+ * that write to the same array and collect those where
+ * the live-out write may occur before the other write.
+ * These live-out writes will be overwritten by the copy-out,
+ * so they need to be copied in first.
  *
  * To determine the second set, we start from all flow dependences.
  * From this set of dependences, we remove those that cannot possibly
@@ -5117,7 +5272,7 @@ static isl_stat update_may_persist_at(__isl_keep isl_schedule_node *node,
  */
 static __isl_give isl_union_set *node_may_persist(
 	__isl_keep isl_schedule_node *node, __isl_keep isl_union_set *domain,
-	struct gpu_prog *prog)
+	__isl_keep isl_union_map *copy_out, struct gpu_prog *prog)
 {
 	struct ppcg_may_persist_data data;
 	isl_union_pw_multi_aff *contraction;
@@ -5130,6 +5285,9 @@ static __isl_give isl_union_set *node_may_persist(
 	data.local_flow = isl_union_map_copy(flow);
 	data.inner_band_flow = isl_union_map_copy(flow);
 	data.may_persist_flow = flow;
+
+	init_may_overwrite(&data, domain, copy_out, prog);
+
 	if (isl_schedule_node_foreach_ancestor_top_down(node,
 					&update_may_persist_at, &data) < 0)
 		data.may_persist_flow =
@@ -5144,6 +5302,9 @@ static __isl_give isl_union_set *node_may_persist(
 	local_flow = data.inner_band_flow;
 	local_flow = isl_union_map_intersect_range(local_flow, domain);
 	flow = isl_union_map_subtract(flow, local_flow);
+
+	flow = isl_union_map_union(flow, data.outer_may_overwrite);
+	isl_union_map_free(data.local_may_overwrite);
 
 	persist = isl_union_map_domain(flow);
 	persist = isl_union_set_apply(persist,
@@ -5218,7 +5379,7 @@ static __isl_give isl_schedule_node *add_to_from_device(
 	may_write = isl_union_map_apply_range(may_write,
 					isl_union_map_copy(prog->to_outer));
 	copy_out = approximate_copy_out(may_write, prog);
-	may_persist = node_may_persist(node, domain, prog);
+	may_persist = node_may_persist(node, domain, copy_out, prog);
 	copy_out = isl_union_map_apply_domain(copy_out,
 					isl_union_map_copy(prefix));
 	may_write = isl_union_map_copy(copy_out);
