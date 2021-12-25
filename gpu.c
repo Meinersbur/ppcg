@@ -5217,11 +5217,11 @@ static __isl_give isl_schedule_node *add_to_from_device(
 					isl_union_map_copy(prefix), 0);
 	may_write = isl_union_map_apply_range(may_write,
 					isl_union_map_copy(prog->to_outer));
-	may_write = approximate_copy_out(may_write, prog);
+	copy_out = approximate_copy_out(may_write, prog);
 	may_persist = node_may_persist(node, domain, prog);
-	may_write = isl_union_map_apply_domain(may_write,
+	copy_out = isl_union_map_apply_domain(copy_out,
 					isl_union_map_copy(prefix));
-	copy_out = isl_union_map_copy(may_write);
+	may_write = isl_union_map_copy(copy_out);
 	may_write = isl_union_map_apply_range(may_write,
 					isl_union_map_copy(prog->to_inner));
 	must_write = isl_union_map_copy(prog->must_write);
