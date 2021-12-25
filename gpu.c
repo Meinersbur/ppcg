@@ -4896,7 +4896,7 @@ static __isl_give isl_union_set *expand_and_tag(
  * "contraction" maps the leaf domain elements of the schedule tree
  * to the corresponding domain elements at (the parent of) "node".
  */
-static int filter_flow(__isl_keep isl_schedule_node *node,
+static isl_stat filter_flow(__isl_keep isl_schedule_node *node,
 	struct ppcg_may_persist_data *data,
 	__isl_take isl_union_pw_multi_aff *contraction)
 {
@@ -4910,7 +4910,7 @@ static int filter_flow(__isl_keep isl_schedule_node *node,
 	flow = isl_union_map_intersect_range(flow, filter);
 	data->local_flow = flow;
 
-	return 0;
+	return isl_stat_ok;
 }
 
 /* Given a filter node "node", collect the filters on all preceding siblings
@@ -4992,7 +4992,7 @@ static void remove_external_flow(struct ppcg_may_persist_data *data,
  *
  * In both cases, we restrict data->local_flow to the current child.
  */
-static int update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
+static isl_stat update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 	struct ppcg_may_persist_data *data)
 {
 	enum isl_schedule_node_type type;
@@ -5003,7 +5003,7 @@ static int update_may_persist_at_filter(__isl_keep isl_schedule_node *node,
 
 	type = isl_schedule_node_get_parent_type(node);
 	if (type != isl_schedule_node_sequence && type != isl_schedule_node_set)
-		return 0;
+		return isl_stat_ok;
 
 	parent = isl_schedule_node_copy(node);
 	parent = isl_schedule_node_parent(parent);
