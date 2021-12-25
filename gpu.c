@@ -4847,7 +4847,7 @@ struct ppcg_may_persist_data {
  * We also update data->inner_band_flow to the new value of
  * data->local_flow.
  */
-static int update_may_persist_at_band(__isl_keep isl_schedule_node *node,
+static isl_stat update_may_persist_at_band(__isl_keep isl_schedule_node *node,
 	struct ppcg_may_persist_data *data)
 {
 	isl_multi_union_pw_aff *partial;
@@ -4855,7 +4855,7 @@ static int update_may_persist_at_band(__isl_keep isl_schedule_node *node,
 	isl_union_map *flow;
 
 	if (isl_schedule_node_band_n_member(node) == 0)
-		return 0;
+		return isl_stat_ok;
 
 	partial = isl_schedule_node_band_get_partial_schedule(node);
 	contraction = isl_schedule_node_get_subtree_contraction(node);
@@ -4871,7 +4871,7 @@ static int update_may_persist_at_band(__isl_keep isl_schedule_node *node,
 	isl_union_map_free(data->inner_band_flow);
 	data->inner_band_flow = isl_union_map_copy(data->local_flow);
 
-	return 0;
+	return isl_stat_ok;
 }
 
 /* Given a set of local reaching domain elements "domain",
