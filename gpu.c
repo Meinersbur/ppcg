@@ -4289,6 +4289,10 @@ error:
  * Adjust the schedule tree in order to execute the second group
  * after the first group and return a pointer to the first group,
  * assuming there are any such subtrees.
+ * The second group is executed after the first group because
+ * otherwise the arrays partially written by the second group
+ * could get overwritten by the copy-out corresponding to the first group,
+ * requiring those arrays to be copied in first.
  * If "node" points to a sequence node, then separate the initial
  * children that do not have suitably permutable bands and
  * return a pointer to the subsequence of children that do have such bands,
