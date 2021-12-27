@@ -4153,7 +4153,7 @@ static __isl_give isl_schedule_node *mark_outer_permutable(
 	return node;
 }
 
-/* Given a set or sequence node, return the union the filters of either all
+/* Given a set or sequence node, return the union of the filters of either all
  * (if "only_initial" is not set) or the initial (if "only_initial" is set)
  * direct subtrees that do not contain any suitably permutable bands
  * (according to subtree_has_permutable_bands).
