@@ -4243,7 +4243,7 @@ static __isl_give isl_schedule_node *declare_accessed_local_variables(
 	for (i = 0; i < prog->n_array; ++i) {
 		isl_space *space;
 		isl_set *set;
-		int empty;
+		isl_bool empty;
 
 		if (!prog->array[i].local)
 			continue;
