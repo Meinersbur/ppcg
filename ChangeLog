@@ -1,3 +1,10 @@
+version: 0.09
+date: Sat 02 Jul 2022 04:11:56 PM CEST
+changes:
+	- try and shift bands to the origin before tiling
+	- try and remove strides in bands before tiling
+	- avoid mapping some nested non-permutable bands to the device
+---
 version: 0.08.5
 date: Sat 01 May 2021 12:53:08 PM CEST
 changes:
